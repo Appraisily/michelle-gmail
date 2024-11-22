@@ -13,13 +13,26 @@ const PORT = process.env.PORT || 3000;
 // Initialize services
 async function initializeServices() {
   try {
+    logger.info('Starting service initialization...');
+    
     // Load secrets first
     await getSecrets();
+    logger.info('Secrets loaded successfully');
     
     // Setup monitoring
     await setupMetrics().catch(error => {
       logger.error('Failed to setup metrics:', error);
     });
+    logger.info('Metrics setup completed');
+
+    // Initial Gmail watch setup
+    try {
+      await renewGmailWatch();
+      logger.info('Initial Gmail watch setup completed');
+    } catch (error) {
+      logger.error('Failed initial Gmail watch setup:', error);
+      // Don't throw here, as we can retry later with cron
+    }
 
     logger.info('Services initialized successfully');
   } catch (error) {
@@ -30,9 +43,10 @@ async function initializeServices() {
 
 // Schedule Gmail watch renewal (every 6 days)
 cron.schedule('0 0 */6 * *', async () => {
+  logger.info('Running scheduled Gmail watch renewal...');
   try {
     await renewGmailWatch();
-    logger.info('Gmail watch renewed successfully');
+    logger.info('Scheduled Gmail watch renewal completed successfully');
   } catch (error) {
     logger.error('Failed to renew Gmail watch:', error);
   }

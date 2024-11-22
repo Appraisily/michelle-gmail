@@ -12,6 +12,7 @@ let auth = null;
 
 async function getGmailAuth() {
   if (!auth) {
+    logger.info('Initializing Gmail authentication...');
     const secrets = await getSecrets();
     const oauth2Client = new google.auth.OAuth2(
       secrets.GMAIL_CLIENT_ID,
@@ -19,13 +20,29 @@ async function getGmailAuth() {
     );
     oauth2Client.setCredentials({ refresh_token: secrets.GMAIL_REFRESH_TOKEN });
     auth = oauth2Client;
+    logger.info('Gmail authentication initialized successfully');
   }
   return auth;
 }
 
 export async function renewGmailWatch() {
   try {
+    logger.info('Starting Gmail watch renewal process...');
+    logger.info(`Using Pub/Sub topic: ${process.env.PUBSUB_TOPIC}`);
+    
     const auth = await getGmailAuth();
+    
+    // First, check if there's an existing watch
+    try {
+      const profile = await gmail.users.getProfile({
+        auth,
+        userId: 'me'
+      });
+      logger.info(`Current Gmail profile historyId: ${profile.data.historyId}`);
+    } catch (error) {
+      logger.error('Error fetching Gmail profile:', error);
+    }
+
     const response = await gmail.users.watch({
       auth,
       userId: 'me',
@@ -36,14 +53,21 @@ export async function renewGmailWatch() {
       }
     });
     
+    const expirationDate = new Date(parseInt(response.data.expiration));
     logger.info('Gmail watch renewed successfully', { 
       historyId: response.data.historyId,
-      expiration: response.data.expiration 
+      expiration: expirationDate.toISOString(),
+      topicName: process.env.PUBSUB_TOPIC
     });
+
     recordMetric('gmail_watch_renewals', 1);
     return response.data;
   } catch (error) {
-    logger.error('Error renewing Gmail watch:', error);
+    logger.error('Error renewing Gmail watch:', {
+      error: error.message,
+      code: error.code,
+      details: error.response?.data || 'No additional details'
+    });
     recordMetric('gmail_watch_renewal_failures', 1);
     throw error;
   }
@@ -115,6 +139,7 @@ async function sendReply(auth, { to, subject, body, threadId, references, inRepl
 
 export async function processGmailNotification(data) {
   try {
+    logger.info('Processing new Gmail notification', { messageId: data.messageId });
     const auth = await getGmailAuth();
     const emailContent = await getEmailContent(auth, data.messageId);
     
@@ -138,6 +163,12 @@ export async function processGmailNotification(data) {
       content: emailContent.body,
       requiresReply,
       reply: generatedReply || 'No reply needed'
+    });
+
+    logger.info('Email processing completed', {
+      sender: emailContent.from,
+      subject: emailContent.subject,
+      requiresReply
     });
 
     recordMetric('emails_processed', 1);
