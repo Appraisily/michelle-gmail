@@ -10,7 +10,9 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // Setup monitoring metrics
-setupMetrics();
+await setupMetrics().catch(error => {
+  logger.error('Failed to setup metrics:', error);
+});
 
 // Schedule Gmail watch renewal (every 6 days)
 cron.schedule('0 0 */6 * *', async () => {
@@ -20,6 +22,11 @@ cron.schedule('0 0 */6 * *', async () => {
   } catch (error) {
     logger.error('Failed to renew Gmail watch:', error);
   }
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
 });
 
 // Webhook endpoint for Gmail notifications via Pub/Sub
@@ -37,12 +44,6 @@ app.post('/notifications', async (req, res) => {
       return res.status(400).send('Invalid subscription');
     }
 
-    // Check for duplicate messages
-    const messageId = message.messageId;
-    if (await isDuplicateMessage(messageId)) {
-      return res.status(200).send('Duplicate message ignored');
-    }
-
     const data = Buffer.from(message.data, 'base64').toString();
     await processGmailNotification(JSON.parse(data));
     
@@ -53,11 +54,7 @@ app.post('/notifications', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).send('OK');
-});
-
+// Start the server
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
 });

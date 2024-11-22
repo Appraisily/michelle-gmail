@@ -1,4 +1,5 @@
-import { Monitoring } from '@google-cloud/monitoring';
+import pkg from '@google-cloud/monitoring';
+const { Monitoring } = pkg;
 
 const monitoring = new Monitoring();
 
@@ -27,12 +28,12 @@ function createMetric(name) {
   };
 }
 
-export function setupMetrics() {
+export async function setupMetrics() {
   // Initialize metrics in Cloud Monitoring
-  Object.keys(metrics).forEach(async (metricName) => {
+  for (const [metricName, metric] of Object.entries(metrics)) {
     try {
       await monitoring.createMetricDescriptor({
-        name: metrics[metricName].type,
+        name: metric.type,
         displayName: metricName,
         type: 'custom.googleapis.com/gmail_processor/' + metricName,
         metricKind: 'GAUGE',
@@ -43,7 +44,7 @@ export function setupMetrics() {
     } catch (error) {
       console.error(`Error creating metric ${metricName}:`, error);
     }
-  });
+  }
 }
 
 export async function recordMetric(metricName, value) {
