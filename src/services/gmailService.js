@@ -12,13 +12,17 @@ let auth = null;
 
 async function getGmailAuth() {
   if (!auth) {
-    logger.info('Initializing Gmail authentication...');
     const secrets = await getSecrets();
     const oauth2Client = new google.auth.OAuth2(
       secrets.GMAIL_CLIENT_ID,
-      secrets.GMAIL_CLIENT_SECRET
+      secrets.GMAIL_CLIENT_SECRET,
+      'https://developers.google.com/oauthplayground'  // OAuth2 playground redirect URI
     );
-    oauth2Client.setCredentials({ refresh_token: secrets.GMAIL_REFRESH_TOKEN });
+
+    oauth2Client.setCredentials({
+      refresh_token: secrets.GMAIL_REFRESH_TOKEN
+    });
+
     auth = oauth2Client;
     logger.info('Gmail authentication initialized successfully');
   }
