@@ -1,6 +1,7 @@
-import { MonitoringServiceClient } from '@google-cloud/monitoring';
+import monitoring from '@google-cloud/monitoring';
+const MonitoringServiceClient = monitoring.v3.MetricServiceClient;
 
-const monitoring = new MonitoringServiceClient();
+const client = new MonitoringServiceClient();
 
 const metrics = {
   'emails_processed': createMetric('emails_processed'),
@@ -28,7 +29,7 @@ function createMetric(name) {
 }
 
 export async function setupMetrics() {
-  const projectPath = monitoring.projectPath(process.env.PROJECT_ID);
+  const projectPath = client.projectPath(process.env.PROJECT_ID);
 
   for (const [metricName, metric] of Object.entries(metrics)) {
     try {
@@ -42,7 +43,7 @@ export async function setupMetrics() {
         description: `Tracks ${metricName.replace(/_/g, ' ')}`
       };
 
-      await monitoring.createMetricDescriptor({
+      await client.createMetricDescriptor({
         name: projectPath,
         metricDescriptor: descriptor
       });
@@ -58,13 +59,13 @@ export async function recordMetric(metricName, value) {
   }
 
   try {
-    const projectPath = monitoring.projectPath(process.env.PROJECT_ID);
+    const projectPath = client.projectPath(process.env.PROJECT_ID);
     const timeSeriesData = {
       metric: metrics[metricName],
       points: [{
         interval: {
           endTime: {
-            seconds: Date.now() / 1000
+            seconds: Math.floor(Date.now() / 1000)
           }
         },
         value: {
@@ -73,7 +74,7 @@ export async function recordMetric(metricName, value) {
       }]
     };
 
-    await monitoring.createTimeSeries({
+    await client.createTimeSeries({
       name: projectPath,
       timeSeries: [timeSeriesData]
     });
