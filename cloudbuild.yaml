@@ -13,7 +13,7 @@ steps:
     args:
       - 'run'
       - 'deploy'
-      - 'gmail-processor'
+      - 'michelle-gmail'  # Changed service name to match existing deployment
       - '--image'
       - 'gcr.io/$PROJECT_ID/gmail-processor'
       - '--region'
@@ -22,9 +22,32 @@ steps:
       - 'managed'
       - '--allow-unauthenticated'
       - '--set-secrets'
-      - 'GMAIL_CLIENT_ID=GMAIL_CLIENT_ID:latest,GMAIL_CLIENT_SECRET=GMAIL_CLIENT_SECRET:latest,GMAIL_REFRESH_TOKEN=GMAIL_REFRESH_TOKEN:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,SHEET_ID=MICHELLE_CHAT_LOG_SPREADSHEETID:latest'
+      - >-
+        GMAIL_CLIENT_ID=GMAIL_CLIENT_ID:latest,
+        GMAIL_CLIENT_SECRET=GMAIL_CLIENT_SECRET:latest,
+        GMAIL_REFRESH_TOKEN=GMAIL_REFRESH_TOKEN:latest,
+        OPENAI_API_KEY=OPENAI_API_KEY:latest,
+        SHEET_ID=MICHELLE_CHAT_LOG_SPREADSHEETID:latest
       - '--set-env-vars'
-      - 'PROJECT_ID=$PROJECT_ID,PUBSUB_TOPIC=gmail-notifications,PUBSUB_SUBSCRIPTION=gmail-notifications-sub'
+      - >-
+        PROJECT_ID=$PROJECT_ID,
+        PUBSUB_TOPIC=projects/$PROJECT_ID/topics/gmail-notifications,
+        PUBSUB_SUBSCRIPTION=projects/$PROJECT_ID/subscriptions/gmail-notifications-sub,
+        NODE_ENV=production
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--min-instances'
+      - '1'
+      - '--max-instances'
+      - '10'
+      - '--port'
+      - '8080'
+      - '--timeout'
+      - '300'
+      - '--service-account'
+      - 'gmail-processor@$PROJECT_ID.iam.gserviceaccount.com'  # Make sure this service account exists
 
 images:
   - 'gcr.io/$PROJECT_ID/gmail-processor'
