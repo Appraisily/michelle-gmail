@@ -1,0 +1,27 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+npm-debug.log
+
+# Environment variables
+.env
+.env.*
+
+# Development files
+*.log
+.vscode
+.idea
+*.md
+
+# Test files
+__tests__
+*.test.js
+*.spec.js
+
+# Other
+.DS_Store
+*.swp
+*.swo

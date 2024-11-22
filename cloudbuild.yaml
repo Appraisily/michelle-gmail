@@ -1,0 +1,30 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/gmail-processor', '.']
+  
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/gmail-processor']
+  
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'gmail-processor'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/gmail-processor'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-secrets'
+      - 'GMAIL_CLIENT_ID=gmail-client-id:latest,GMAIL_CLIENT_SECRET=gmail-client-secret:latest,GMAIL_REFRESH_TOKEN=gmail-refresh-token:latest,OPENAI_API_KEY=openai-api-key:latest'
+      - '--set-env-vars'
+      - 'PROJECT_ID=$PROJECT_ID,PUBSUB_TOPIC=projects/$PROJECT_ID/topics/gmail-notifications,PUBSUB_SUBSCRIPTION=projects/$PROJECT_ID/subscriptions/gmail-notifications-sub,SHEET_ID=${_SHEET_ID}'
+
+images:
+  - 'gcr.io/$PROJECT_ID/gmail-processor'
