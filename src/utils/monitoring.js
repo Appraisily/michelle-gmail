@@ -1,7 +1,6 @@
-import pkg from '@google-cloud/monitoring';
-const { Monitoring } = pkg;
+import { MonitoringServiceClient } from '@google-cloud/monitoring';
 
-const monitoring = new Monitoring();
+const monitoring = new MonitoringServiceClient();
 
 const metrics = {
   'emails_processed': createMetric('emails_processed'),
@@ -29,10 +28,11 @@ function createMetric(name) {
 }
 
 export async function setupMetrics() {
-  // Initialize metrics in Cloud Monitoring
+  const projectPath = monitoring.projectPath(process.env.PROJECT_ID);
+
   for (const [metricName, metric] of Object.entries(metrics)) {
     try {
-      await monitoring.createMetricDescriptor({
+      const descriptor = {
         name: metric.type,
         displayName: metricName,
         type: 'custom.googleapis.com/gmail_processor/' + metricName,
@@ -40,6 +40,11 @@ export async function setupMetrics() {
         valueType: 'INT64',
         unit: '1',
         description: `Tracks ${metricName.replace(/_/g, ' ')}`
+      };
+
+      await monitoring.createMetricDescriptor({
+        name: projectPath,
+        metricDescriptor: descriptor
       });
     } catch (error) {
       console.error(`Error creating metric ${metricName}:`, error);
@@ -53,24 +58,23 @@ export async function recordMetric(metricName, value) {
   }
 
   try {
-    const dataPoint = {
-      interval: {
-        endTime: {
-          seconds: Date.now() / 1000
-        }
-      },
-      value: {
-        int64Value: value
-      }
-    };
-
+    const projectPath = monitoring.projectPath(process.env.PROJECT_ID);
     const timeSeriesData = {
       metric: metrics[metricName],
-      points: [dataPoint]
+      points: [{
+        interval: {
+          endTime: {
+            seconds: Date.now() / 1000
+          }
+        },
+        value: {
+          int64Value: value
+        }
+      }]
     };
 
     await monitoring.createTimeSeries({
-      name: `projects/${process.env.PROJECT_ID}`,
+      name: projectPath,
       timeSeries: [timeSeriesData]
     });
   } catch (error) {
