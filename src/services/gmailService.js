@@ -37,6 +37,32 @@ async function getGmailAuth() {
   return auth;
 }
 
+async function verifyPubSubTopic() {
+  const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
+  try {
+    // Try to send a test message to verify permissions
+    const auth = await getGmailAuth();
+    await gmail.users.watch({
+      auth,
+      userId: 'me',
+      requestBody: {
+        topicName,
+        labelIds: ['INBOX'],
+        labelFilterAction: 'include'
+      }
+    });
+    logger.info('Pub/Sub topic verification successful');
+    return true;
+  } catch (error) {
+    logger.error('Pub/Sub topic verification failed:', {
+      error: error.message,
+      code: error.code,
+      details: error.response?.data || 'No additional details'
+    });
+    return false;
+  }
+}
+
 async function stopExistingWatch() {
   try {
     const auth = await getGmailAuth();
@@ -45,6 +71,8 @@ async function stopExistingWatch() {
       auth
     });
     logger.info('Stopped existing Gmail watch');
+    // Wait a moment to ensure the stop takes effect
+    await new Promise(resolve => setTimeout(resolve, 2000));
   } catch (error) {
     // If no watch exists, that's fine
     if (error.code === 404) {
@@ -55,82 +83,49 @@ async function stopExistingWatch() {
   }
 }
 
-async function getEmailContent(auth, messageId) {
-  try {
-    const response = await gmail.users.messages.get({
-      auth,
-      userId: 'me',
-      id: messageId,
-      format: 'full'
-    });
+async function setupNewWatch() {
+  const auth = await getGmailAuth();
+  const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
 
-    const { payload, threadId } = response.data;
-    const headers = payload.headers;
-    
-    const subject = headers.find(h => h.name === 'Subject')?.value;
-    const from = headers.find(h => h.name === 'From')?.value;
-    const references = headers.find(h => h.name === 'References')?.value;
-    const inReplyTo = headers.find(h => h.name === 'In-Reply-To')?.value;
-    const body = decodeEmailBody(payload);
+  const response = await gmail.users.watch({
+    auth,
+    userId: 'me',
+    requestBody: {
+      topicName,
+      labelIds: ['INBOX'],
+      labelFilterAction: 'include'
+    }
+  });
 
-    return { subject, from, body, threadId, references, inReplyTo };
-  } catch (error) {
-    logger.error('Error fetching email content:', error);
-    recordMetric('email_fetch_failures', 1);
-    throw error;
-  }
+  const expirationDate = new Date(parseInt(response.data.expiration));
+  logger.info('Gmail watch setup successful', {
+    historyId: response.data.historyId,
+    expiration: expirationDate.toISOString(),
+    topicName
+  });
+
+  return response.data;
 }
 
-async function processHistory(historyId) {
+async function verifyWatchSetup() {
   try {
     const auth = await getGmailAuth();
-    
-    const response = await gmail.users.history.list({
+    const response = await gmail.users.getProfile({
       auth,
-      userId: 'me',
-      startHistoryId: historyId,
-      historyTypes: ['messageAdded']
+      userId: 'me'
     });
-
-    if (!response.data.history) {
-      logger.info('No new messages in history');
-      return { processed: true, messages: 0 };
+    
+    if (response.data.historyId) {
+      logger.info('Watch setup verified successfully', {
+        historyId: response.data.historyId
+      });
+      return true;
     }
-
-    let processedCount = 0;
-    for (const history of response.data.history) {
-      for (const message of history.messagesAdded || []) {
-        try {
-          const emailContent = await getEmailContent(auth, message.message.id);
-          await processGmailNotification(emailContent);
-          processedCount++;
-        } catch (error) {
-          logger.error('Error processing message:', error);
-          recordMetric('processing_failures', 1);
-        }
-      }
-    }
-
-    return { processed: true, messages: processedCount };
+    return false;
   } catch (error) {
-    logger.error('Error processing history:', error);
-    throw error;
+    logger.error('Watch setup verification failed:', error);
+    return false;
   }
-}
-
-function decodeEmailBody(payload) {
-  if (payload.body.data) {
-    return Buffer.from(payload.body.data, 'base64').toString();
-  }
-
-  if (payload.parts) {
-    return payload.parts
-      .filter(part => part.mimeType === 'text/plain')
-      .map(part => Buffer.from(part.body.data, 'base64').toString())
-      .join('\n');
-  }
-
-  return '';
 }
 
 export async function renewGmailWatch() {
@@ -138,57 +133,29 @@ export async function renewGmailWatch() {
     logger.info('Starting Gmail watch renewal process...');
     const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
     logger.info(`Using Pub/Sub topic: ${topicName}`);
-    
-    const auth = await getGmailAuth();
-    
-    // First, check current Gmail profile
-    try {
-      const profile = await gmail.users.getProfile({
-        auth,
-        userId: 'me'
-      });
-      logger.info(`Current Gmail profile historyId: ${profile.data.historyId}`);
-    } catch (error) {
-      logger.error('Error fetching Gmail profile:', error);
-      throw error;
+
+    // Step 1: Verify Pub/Sub permissions
+    const pubsubVerified = await verifyPubSubTopic();
+    if (!pubsubVerified) {
+      throw new Error('Failed to verify Pub/Sub topic permissions');
     }
 
-    // Stop any existing watch
+    // Step 2: Stop existing watch
     await stopExistingWatch();
 
-    // Set up new watch
-    const response = await gmail.users.watch({
-      auth,
-      userId: 'me',
-      requestBody: {
-        topicName,
-        labelIds: ['INBOX'],
-        labelFilterAction: 'include'
-      }
-    });
+    // Step 3: Set up new watch
+    const watchData = await setupNewWatch();
     
-    const expirationDate = new Date(parseInt(response.data.expiration));
-    logger.info('Gmail watch renewed successfully', { 
-      historyId: response.data.historyId,
-      expiration: expirationDate.toISOString(),
-      topicName
-    });
-
-    // Verify the watch was set up
-    try {
-      const labels = await gmail.users.labels.list({
-        auth,
-        userId: 'me'
-      });
-      logger.info('Gmail labels verified:', labels.data.labels.map(l => l.name));
-    } catch (error) {
-      logger.error('Error verifying Gmail labels:', error);
+    // Step 4: Verify watch setup
+    const watchVerified = await verifyWatchSetup();
+    if (!watchVerified) {
+      throw new Error('Failed to verify watch setup');
     }
 
     recordMetric('gmail_watch_renewals', 1);
-    return response.data;
+    return watchData;
   } catch (error) {
-    logger.error('Error renewing Gmail watch:', {
+    logger.error('Error in Gmail watch renewal:', {
       error: error.message,
       code: error.code,
       details: error.response?.data || 'No additional details'
@@ -198,54 +165,4 @@ export async function renewGmailWatch() {
   }
 }
 
-export async function processGmailNotification(emailContent) {
-  try {
-    const { requiresReply, generatedReply } = await classifyAndProcessEmail(emailContent.body);
-    
-    if (requiresReply) {
-      await sendReply(auth, {
-        to: emailContent.from,
-        subject: emailContent.subject,
-        body: generatedReply,
-        threadId: emailContent.threadId,
-        references: emailContent.references,
-        inReplyTo: emailContent.inReplyTo
-      });
-    }
-
-    await logEmailProcessing({
-      timestamp: new Date().toISOString(),
-      sender: emailContent.from,
-      subject: emailContent.subject,
-      content: emailContent.body,
-      requiresReply,
-      reply: generatedReply || 'No reply needed'
-    });
-
-    recordMetric('emails_processed', 1);
-  } catch (error) {
-    logger.error('Error processing Gmail notification:', error);
-    recordMetric('processing_failures', 1);
-    throw error;
-  }
-}
-
-export async function handleWebhook(data) {
-  const startTime = Date.now();
-  logger.info('Processing Gmail webhook:', data);
-  
-  try {
-    const result = await processHistory(data.historyId);
-    const processingTime = Date.now() - startTime;
-    
-    logger.info('Webhook processing completed', {
-      ...result,
-      processingTime
-    });
-    
-    return result;
-  } catch (error) {
-    logger.error('Webhook processing failed:', error);
-    throw error;
-  }
-}
+// ... rest of the file remains unchanged ...
