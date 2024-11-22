@@ -3,16 +3,30 @@ import cron from 'node-cron';
 import { processGmailNotification, renewGmailWatch } from './services/gmailService.js';
 import { logger } from './utils/logger.js';
 import { setupMetrics } from './utils/monitoring.js';
+import { getSecrets } from './utils/secretManager.js';
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Setup monitoring metrics
-await setupMetrics().catch(error => {
-  logger.error('Failed to setup metrics:', error);
-});
+// Initialize services
+async function initializeServices() {
+  try {
+    // Load secrets first
+    await getSecrets();
+    
+    // Setup monitoring
+    await setupMetrics().catch(error => {
+      logger.error('Failed to setup metrics:', error);
+    });
+
+    logger.info('Services initialized successfully');
+  } catch (error) {
+    logger.error('Failed to initialize services:', error);
+    throw error;
+  }
+}
 
 // Schedule Gmail watch renewal (every 6 days)
 cron.schedule('0 0 */6 * *', async () => {
@@ -22,11 +36,6 @@ cron.schedule('0 0 */6 * *', async () => {
   } catch (error) {
     logger.error('Failed to renew Gmail watch:', error);
   }
-});
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).send('OK');
 });
 
 // Webhook endpoint for Gmail notifications via Pub/Sub
@@ -54,7 +63,17 @@ app.post('/notifications', async (req, res) => {
   }
 });
 
-// Start the server
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
+// Initialize services and start server
+initializeServices().then(() => {
+  app.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT}`);
+  });
+}).catch(error => {
+  logger.error('Failed to start server:', error);
+  process.exit(1);
 });

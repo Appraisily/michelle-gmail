@@ -1,10 +1,19 @@
 import OpenAI from 'openai';
 import { logger } from '../utils/logger.js';
 import { recordMetric } from '../utils/monitoring.js';
+import { getSecrets } from '../utils/secretManager.js';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+let openaiClient = null;
+
+async function getOpenAIClient() {
+  if (!openaiClient) {
+    const secrets = await getSecrets();
+    openaiClient = new OpenAI({
+      apiKey: secrets.OPENAI_API_KEY
+    });
+  }
+  return openaiClient;
+}
 
 const classifyEmailFunction = {
   name: "classifyEmail",
@@ -23,6 +32,8 @@ const classifyEmailFunction = {
 
 export async function classifyAndProcessEmail(emailContent) {
   try {
+    const openai = await getOpenAIClient();
+    
     // First, classify if the email needs a reply using function calling
     const classificationResponse = await openai.chat.completions.create({
       model: "gpt-4",
