@@ -6,8 +6,6 @@ import { getSecrets } from '../utils/secretManager.js';
 import { recordMetric } from '../utils/monitoring.js';
 
 const gmail = google.gmail('v1');
-const WATCH_EXPIRATION = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
-
 let auth = null;
 
 async function getGmailAuth() {
@@ -83,40 +81,39 @@ async function getEmailContent(auth, messageId) {
   }
 }
 
-async function sendReply(auth, { to, subject, body, threadId, references, inReplyTo }) {
+async function processHistory(historyId) {
   try {
-    const message = [
-      'From: me',
-      `To: ${to}`,
-      `Subject: Re: ${subject}`,
-      'Content-Type: text/plain; charset=utf-8',
-      'MIME-Version: 1.0',
-      references ? `References: ${references}` : '',
-      inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
-      '',
-      body
-    ].filter(Boolean).join('\n');
-
-    const encodedMessage = Buffer.from(message)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-
-    await gmail.users.messages.send({
+    const auth = await getGmailAuth();
+    
+    const response = await gmail.users.history.list({
       auth,
       userId: 'me',
-      requestBody: {
-        raw: encodedMessage,
-        threadId
-      }
+      startHistoryId: historyId,
+      historyTypes: ['messageAdded']
     });
 
-    logger.info('Reply sent successfully', { to, subject });
-    recordMetric('replies_sent', 1);
+    if (!response.data.history) {
+      logger.info('No new messages in history');
+      return { processed: true, messages: 0 };
+    }
+
+    let processedCount = 0;
+    for (const history of response.data.history) {
+      for (const message of history.messagesAdded || []) {
+        try {
+          const emailContent = await getEmailContent(auth, message.message.id);
+          await processGmailNotification(emailContent);
+          processedCount++;
+        } catch (error) {
+          logger.error('Error processing message:', error);
+          recordMetric('processing_failures', 1);
+        }
+      }
+    }
+
+    return { processed: true, messages: processedCount };
   } catch (error) {
-    logger.error('Error sending reply:', error);
-    recordMetric('reply_failures', 1);
+    logger.error('Error processing history:', error);
     throw error;
   }
 }
@@ -201,11 +198,8 @@ export async function renewGmailWatch() {
   }
 }
 
-export async function processGmailNotification(data) {
+export async function processGmailNotification(emailContent) {
   try {
-    const auth = await getGmailAuth();
-    const emailContent = await getEmailContent(auth, data.messageId);
-    
     const { requiresReply, generatedReply } = await classifyAndProcessEmail(emailContent.body);
     
     if (requiresReply) {
@@ -232,6 +226,26 @@ export async function processGmailNotification(data) {
   } catch (error) {
     logger.error('Error processing Gmail notification:', error);
     recordMetric('processing_failures', 1);
+    throw error;
+  }
+}
+
+export async function handleWebhook(data) {
+  const startTime = Date.now();
+  logger.info('Processing Gmail webhook:', data);
+  
+  try {
+    const result = await processHistory(data.historyId);
+    const processingTime = Date.now() - startTime;
+    
+    logger.info('Webhook processing completed', {
+      ...result,
+      processingTime
+    });
+    
+    return result;
+  } catch (error) {
+    logger.error('Webhook processing failed:', error);
     throw error;
   }
 }

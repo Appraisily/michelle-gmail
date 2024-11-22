@@ -1,6 +1,6 @@
 import express from 'express';
 import cron from 'node-cron';
-import { processGmailNotification, renewGmailWatch } from './services/gmailService.js';
+import { handleWebhook, renewGmailWatch } from './services/gmailService.js';
 import { logger } from './utils/logger.js';
 import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
@@ -84,7 +84,7 @@ app.post('/api/gmail/webhook', async (req, res) => {
     }
 
     const data = Buffer.from(message.data, 'base64').toString();
-    await processGmailNotification(JSON.parse(data));
+    await handleWebhook(JSON.parse(data));
     
     res.status(200).send('Notification processed successfully');
   } catch (error) {
