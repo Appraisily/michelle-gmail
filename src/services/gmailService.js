@@ -128,6 +128,116 @@ async function verifyWatchSetup() {
   }
 }
 
+async function processNewMessages(startHistoryId) {
+  const auth = await getGmailAuth();
+  
+  try {
+    const response = await gmail.users.history.list({
+      auth,
+      userId: 'me',
+      startHistoryId,
+      historyTypes: ['messageAdded']
+    });
+
+    if (!response.data.history) {
+      logger.info('No new messages to process');
+      return 0;
+    }
+
+    let processedCount = 0;
+    for (const history of response.data.history) {
+      for (const message of history.messagesAdded || []) {
+        try {
+          const messageData = await gmail.users.messages.get({
+            auth,
+            userId: 'me',
+            id: message.message.id,
+            format: 'full'
+          });
+
+          const emailContent = {
+            id: messageData.data.id,
+            threadId: messageData.data.threadId,
+            subject: messageData.data.payload.headers.find(h => h.name === 'Subject')?.value,
+            from: messageData.data.payload.headers.find(h => h.name === 'From')?.value,
+            body: messageData.data.snippet
+          };
+
+          const { requiresReply, generatedReply } = await classifyAndProcessEmail(emailContent.body);
+          
+          if (requiresReply) {
+            // Send reply
+            const replyMessage = {
+              userId: 'me',
+              resource: {
+                raw: Buffer.from(
+                  `To: ${emailContent.from}\r\n` +
+                  `Subject: Re: ${emailContent.subject}\r\n` +
+                  `In-Reply-To: ${emailContent.id}\r\n` +
+                  `References: ${emailContent.id}\r\n` +
+                  `Content-Type: text/plain; charset=utf-8\r\n\r\n` +
+                  `${generatedReply}`
+                ).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+              },
+              threadId: emailContent.threadId
+            };
+
+            await gmail.users.messages.send({
+              auth,
+              userId: 'me',
+              resource: replyMessage
+            });
+
+            logger.info('Reply sent successfully', { messageId: emailContent.id });
+          }
+
+          await logEmailProcessing({
+            timestamp: new Date().toISOString(),
+            sender: emailContent.from,
+            subject: emailContent.subject,
+            content: emailContent.body,
+            requiresReply,
+            reply: generatedReply || 'No reply needed'
+          });
+
+          processedCount++;
+          recordMetric('emails_processed', 1);
+        } catch (error) {
+          logger.error('Error processing message:', {
+            messageId: message.message.id,
+            error: error.message
+          });
+          recordMetric('processing_failures', 1);
+        }
+      }
+    }
+
+    return processedCount;
+  } catch (error) {
+    logger.error('Error fetching message history:', error);
+    throw error;
+  }
+}
+
+export async function handleWebhook(data) {
+  logger.info('Processing Gmail webhook:', data);
+  const startTime = Date.now();
+
+  try {
+    const processedCount = await processNewMessages(data.historyId);
+    
+    const processingTime = Date.now() - startTime;
+    logger.info('Webhook processing completed', {
+      processed: true,
+      messages: processedCount,
+      processingTime
+    });
+  } catch (error) {
+    logger.error('Error in webhook handler:', error);
+    throw error;
+  }
+}
+
 export async function renewGmailWatch() {
   try {
     logger.info('Starting Gmail watch renewal process...');
@@ -164,5 +274,3 @@ export async function renewGmailWatch() {
     throw error;
   }
 }
-
-// ... rest of the file remains unchanged ...
