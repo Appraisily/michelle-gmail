@@ -16,7 +16,7 @@ async function initializeServices() {
     logger.info('Starting service initialization...');
     
     // Validate required environment variables
-    const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION'];
+    const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION', 'GMAIL_USER_EMAIL'];
     const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
     
     if (missingEnvVars.length > 0) {
@@ -26,7 +26,8 @@ async function initializeServices() {
     logger.info('Environment variables validated', {
       projectId: process.env.PROJECT_ID,
       pubsubTopic: process.env.PUBSUB_TOPIC,
-      pubsubSubscription: process.env.PUBSUB_SUBSCRIPTION
+      pubsubSubscription: process.env.PUBSUB_SUBSCRIPTION,
+      gmailUser: process.env.GMAIL_USER_EMAIL
     });
     
     // Load secrets first
@@ -57,8 +58,8 @@ async function initializeServices() {
 
 // Schedule Gmail watch renewal (every 6 days)
 cron.schedule('0 0 */6 * *', async () => {
-  logger.info('Running scheduled Gmail watch renewal...');
   try {
+    logger.info('Running scheduled Gmail watch renewal...');
     await renewGmailWatch();
     logger.info('Scheduled Gmail watch renewal completed successfully');
   } catch (error) {
@@ -67,17 +68,18 @@ cron.schedule('0 0 */6 * *', async () => {
 });
 
 // Webhook endpoint for Gmail notifications via Pub/Sub
-app.post('/notifications', async (req, res) => {
+app.post('/api/gmail/webhook', async (req, res) => {
   try {
     const message = req.body.message;
     if (!message) {
+      logger.warn('No Pub/Sub message received');
       return res.status(400).send('No Pub/Sub message received');
     }
 
     // Verify the subscription
     const subscription = message.attributes?.subscription;
     if (subscription !== process.env.PUBSUB_SUBSCRIPTION) {
-      logger.warn(`Unexpected subscription: ${subscription}`);
+      logger.warn(`Invalid subscription: ${subscription}`);
       return res.status(400).send('Invalid subscription');
     }
 
@@ -86,7 +88,7 @@ app.post('/notifications', async (req, res) => {
     
     res.status(200).send('Notification processed successfully');
   } catch (error) {
-    logger.error('Error processing notification:', error);
+    logger.error('Error processing webhook:', error);
     res.status(500).send('Error processing notification');
   }
 });

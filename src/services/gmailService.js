@@ -115,7 +115,7 @@ async function sendReply(auth, { to, subject, body, threadId, references, inRepl
       inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
       '',
       body
-    ].filter(Boolean).join('\n');
+    ].filter(Boolean).join('\r\n');
 
     const encodedMessage = Buffer.from(message)
       .toString('base64')
