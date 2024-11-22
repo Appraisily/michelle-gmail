@@ -47,7 +47,7 @@ export async function renewGmailWatch() {
       auth,
       userId: 'me',
       requestBody: {
-        topicName: process.env.PUBSUB_TOPIC,
+        topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`,
         labelIds: ['INBOX'],
         labelFilterAction: 'include'
       }

@@ -15,6 +15,20 @@ async function initializeServices() {
   try {
     logger.info('Starting service initialization...');
     
+    // Validate required environment variables
+    const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION'];
+    const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    
+    if (missingEnvVars.length > 0) {
+      throw new Error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
+    }
+
+    logger.info('Environment variables validated', {
+      projectId: process.env.PROJECT_ID,
+      pubsubTopic: process.env.PUBSUB_TOPIC,
+      pubsubSubscription: process.env.PUBSUB_SUBSCRIPTION
+    });
+    
     // Load secrets first
     await getSecrets();
     logger.info('Secrets loaded successfully');
