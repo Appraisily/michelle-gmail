@@ -5,11 +5,11 @@ import { logger } from './utils/logger.js';
 import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
 
-// Ensure NODE_ENV is set
-process.env.NODE_ENV = process.env.NODE_ENV || 'production';
-
 const app = express();
 app.use(express.json({ limit: '10mb' }));
+
+// Ensure NODE_ENV is set
+process.env.NODE_ENV = process.env.NODE_ENV || 'production';
 
 const PORT = process.env.PORT || 3000;
 
@@ -56,12 +56,11 @@ cron.schedule('0 0 */6 * *', async () => {
 
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
+    // Log the incoming webhook details
     logger.info('Received webhook request', {
-      bodySize: JSON.stringify(req.body).length,
       hasMessage: !!req.body?.message,
       messageData: req.body?.message?.data ? 'present' : 'missing',
-      messageAttributes: req.body?.message?.attributes || {},
-      subscription: req.body?.message?.attributes?.subscription || 'not_provided'
+      messageAttributes: req.body?.message?.attributes || {}
     });
 
     const message = req.body.message;
@@ -77,7 +76,8 @@ app.post('/api/gmail/webhook', async (req, res) => {
 
     const decodedData = Buffer.from(message.data, 'base64').toString();
     logger.info('Decoded Pub/Sub data', { 
-      dataLength: decodedData.length 
+      dataLength: decodedData.length,
+      decodedContent: decodedData // This will show us the actual content
     });
 
     let parsedData;
@@ -86,7 +86,7 @@ app.post('/api/gmail/webhook', async (req, res) => {
       logger.info('Parsed notification data', { 
         historyId: parsedData.historyId,
         emailAddress: parsedData.emailAddress,
-        hasHistoryId: !!parsedData.historyId
+        parsedContent: parsedData // Full parsed content for inspection
       });
     } catch (error) {
       logger.error('Failed to parse message data', { 
