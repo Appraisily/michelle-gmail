@@ -1,4 +1,99 @@
-// Previous imports remain the same...
+import { google } from 'googleapis';
+import { logger } from '../utils/logger.js';
+import { recordMetric } from '../utils/monitoring.js';
+import { getSecrets } from '../utils/secretManager.js';
+import { classifyAndProcessEmail } from './openaiService.js';
+import { logEmailProcessing } from './sheetsService.js';
+
+const gmail = google.gmail('v1');
+let lastHistoryId = null;
+
+async function getGmailAuth() {
+  const secrets = await getSecrets();
+  const oauth2Client = new google.auth.OAuth2(
+    secrets.GMAIL_CLIENT_ID,
+    secrets.GMAIL_CLIENT_SECRET
+  );
+
+  oauth2Client.setCredentials({
+    refresh_token: secrets.GMAIL_REFRESH_TOKEN
+  });
+
+  return oauth2Client;
+}
+
+async function stopExistingWatch(auth) {
+  try {
+    await gmail.users.stop({
+      auth,
+      userId: 'me'
+    });
+    logger.info('Stopped existing Gmail watch');
+  } catch (error) {
+    // Ignore errors if no watch exists
+    if (!error.message.includes('No watch exists')) {
+      logger.warn('Error stopping existing watch:', error);
+    }
+  }
+}
+
+export async function initializeGmailWatch() {
+  try {
+    logger.info('Starting Gmail watch initialization...');
+    const auth = await getGmailAuth();
+    logger.info('Gmail credentials and permissions verified successfully');
+
+    // Stop any existing watch
+    await stopExistingWatch(auth);
+
+    // Set up new watch
+    const watchResponse = await gmail.users.watch({
+      auth,
+      userId: 'me',
+      requestBody: {
+        topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`,
+        labelIds: ['INBOX']
+      }
+    });
+
+    logger.info('Gmail watch setup successful', {
+      historyId: watchResponse.data.historyId,
+      expiration: watchResponse.data.expiration
+    });
+
+    // Initialize lastHistoryId
+    lastHistoryId = watchResponse.data.historyId;
+    recordMetric('gmail_watch_renewals', 1);
+
+    return watchResponse.data;
+  } catch (error) {
+    logger.error('Failed to initialize Gmail watch:', error);
+    recordMetric('gmail_watch_renewal_failures', 1);
+    throw error;
+  }
+}
+
+export async function handleWebhook(data) {
+  try {
+    logger.info('📨 Gmail Webhook Data', {
+      historyId: data.historyId,
+      emailAddress: data.emailAddress,
+      timestamp: new Date().toISOString()
+    });
+
+    const processedCount = await processNewMessages(data.historyId);
+    
+    logger.info('Webhook processing completed', {
+      processedCount,
+      historyId: data.historyId
+    });
+
+    return processedCount;
+  } catch (error) {
+    logger.error('Webhook processing failed:', error);
+    throw error;
+  }
+}
 
 async function processNewMessages(notificationHistoryId) {
   const auth = await getGmailAuth();
@@ -157,7 +252,37 @@ async function processNewMessages(notificationHistoryId) {
             hasBody: !!emailContent.body
           });
 
-          // Rest of the processing remains the same...
+          // Process email with OpenAI
+          const { requiresReply, generatedReply } = await classifyAndProcessEmail(emailContent.body);
+
+          // Log to Google Sheets
+          await logEmailProcessing({
+            timestamp: new Date().toISOString(),
+            sender: emailContent.from,
+            subject: emailContent.subject,
+            requiresReply,
+            reply: generatedReply || 'No reply needed'
+          });
+
+          if (requiresReply && generatedReply) {
+            // Send reply
+            await gmail.users.messages.send({
+              auth,
+              userId: 'me',
+              requestBody: {
+                threadId: emailContent.threadId,
+                raw: Buffer.from(
+                  `To: ${emailContent.from}\r\n` +
+                  `Subject: Re: ${emailContent.subject}\r\n` +
+                  `Content-Type: text/plain; charset="UTF-8"\r\n` +
+                  `Content-Transfer-Encoding: 7bit\r\n\r\n` +
+                  `${generatedReply}`
+                ).toString('base64')
+              }
+            });
+
+            recordMetric('replies_sent', 1);
+          }
           
           processedCount++;
           recordMetric('emails_processed', 1);
@@ -196,5 +321,3 @@ async function processNewMessages(notificationHistoryId) {
     throw error;
   }
 }
-
-// Rest of the file remains the same...
