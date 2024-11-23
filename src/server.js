@@ -5,6 +5,9 @@ import { logger } from './utils/logger.js';
 import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
 
+// Ensure NODE_ENV is set
+process.env.NODE_ENV = process.env.NODE_ENV || 'production';
+
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
@@ -12,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 
 async function initializeServices() {
   try {
-    logger.info('Starting service initialization...');
+    logger.info('Starting service initialization...', { env: process.env.NODE_ENV });
     
     const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION', 'GMAIL_USER_EMAIL'];
     const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
@@ -53,9 +56,7 @@ cron.schedule('0 0 */6 * *', async () => {
 
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
-    // Log the complete raw request body
     logger.info('Received webhook request', {
-      rawBody: JSON.stringify(req.body),
       bodySize: JSON.stringify(req.body).length,
       hasMessage: !!req.body?.message,
       messageData: req.body?.message?.data ? 'present' : 'missing',
@@ -65,18 +66,17 @@ app.post('/api/gmail/webhook', async (req, res) => {
 
     const message = req.body.message;
     if (!message) {
-      logger.warn('No message in webhook body', { body: req.body });
+      logger.warn('No message in webhook body');
       return res.status(400).send('No message received');
     }
 
     if (!message.data) {
-      logger.warn('No data in Pub/Sub message', { message });
+      logger.warn('No data in Pub/Sub message');
       return res.status(400).send('No data in message');
     }
 
     const decodedData = Buffer.from(message.data, 'base64').toString();
     logger.info('Decoded Pub/Sub data', { 
-      raw: decodedData,
       dataLength: decodedData.length 
     });
 
@@ -84,11 +84,9 @@ app.post('/api/gmail/webhook', async (req, res) => {
     try {
       parsedData = JSON.parse(decodedData);
       logger.info('Parsed notification data', { 
-        raw: parsedData,
         historyId: parsedData.historyId,
         emailAddress: parsedData.emailAddress,
-        hasHistoryId: !!parsedData.historyId,
-        subscriptionName: message.attributes?.subscription || 'not_provided'
+        hasHistoryId: !!parsedData.historyId
       });
     } catch (error) {
       logger.error('Failed to parse message data', { 
@@ -99,7 +97,7 @@ app.post('/api/gmail/webhook', async (req, res) => {
     }
 
     if (!parsedData.historyId) {
-      logger.warn('No historyId in notification', { parsedData });
+      logger.warn('No historyId in notification');
       return res.status(400).send('No historyId in notification');
     }
 
@@ -116,12 +114,16 @@ app.post('/api/gmail/webhook', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).send('OK');
+  res.status(200).json({
+    status: 'OK',
+    env: process.env.NODE_ENV,
+    timestamp: new Date().toISOString()
+  });
 });
 
 initializeServices().then(() => {
   app.listen(PORT, () => {
-    logger.info(`Server running on port ${PORT}`);
+    logger.info(`Server running on port ${PORT}`, { env: process.env.NODE_ENV });
   });
 }).catch(error => {
   logger.error('Failed to start server:', error);

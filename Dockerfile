@@ -1,5 +1,9 @@
 FROM node:20-slim
 
+# Set NODE_ENV at build time
+ARG NODE_ENV=production
+ENV NODE_ENV=$NODE_ENV
+
 WORKDIR /app
 
 # Copy package files
@@ -11,8 +15,7 @@ RUN npm install --omit=dev
 # Copy application code
 COPY . .
 
-# Set environment variables
-ENV NODE_ENV=production
+# Set runtime environment variables
 ENV PORT=8080
 
 # Expose port
