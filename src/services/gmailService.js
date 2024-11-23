@@ -1,140 +1,94 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
-import { recordMetric } from '../utils/monitoring.js';
-import { initializeGmailAuth } from './gmailAuth.js';
+import { getSecrets } from '../utils/secretManager.js';
 
 const gmail = google.gmail('v1');
 let lastHistoryId = null;
 
-export async function handleWebhook(rawData) {
+async function getGmailAuth() {
+  const secrets = await getSecrets();
+  
+  const auth = new google.auth.OAuth2(
+    secrets.GMAIL_CLIENT_ID,
+    secrets.GMAIL_CLIENT_SECRET
+  );
+
+  auth.setCredentials({
+    refresh_token: secrets.GMAIL_REFRESH_TOKEN
+  });
+
+  return auth;
+}
+
+export async function handleWebhook(data) {
   try {
-    logger.info('Raw webhook data received:', {
-      rawData: JSON.stringify(rawData)
-    });
+    logger.info('Processing webhook data', { data: JSON.stringify(data) });
 
-    // Extract data from Pub/Sub message
-    const message = rawData.message;
-    if (!message || !message.data) {
-      logger.error('Invalid webhook payload', { rawData: JSON.stringify(rawData) });
-      throw new Error('Invalid webhook payload');
+    if (!data.message || !data.message.data) {
+      throw new Error('Invalid webhook data');
     }
 
-    // Decode base64 data
-    const decodedString = Buffer.from(message.data, 'base64').toString();
-    logger.info('Decoded Pub/Sub data:', { decodedString });
+    const decodedData = Buffer.from(data.message.data, 'base64').toString();
+    logger.info('Decoded data', { decodedData });
 
-    let data;
-    try {
-      data = JSON.parse(decodedString);
-      logger.info('Parsed notification data:', {
-        historyId: data.historyId,
-        emailAddress: data.emailAddress,
-        data: JSON.stringify(data)
-      });
-    } catch (error) {
-      logger.error('Failed to parse webhook data:', {
-        decodedString,
-        error: error.message
-      });
-      throw error;
-    }
+    const notification = JSON.parse(decodedData);
+    logger.info('Parsed notification', { notification });
 
-    if (!data.historyId) {
-      logger.error('No historyId in notification', { data: JSON.stringify(data) });
+    if (!notification.historyId) {
       throw new Error('No historyId in notification');
     }
 
-    const processedCount = await processNewMessages(data.historyId);
-    return processedCount;
-  } catch (error) {
-    logger.error('Error processing webhook:', error);
-    throw error;
-  }
-}
+    const auth = await getGmailAuth();
 
-async function processNewMessages(notificationHistoryId) {
-  const auth = await initializeGmailAuth();
-  
-  try {
-    logger.info('Processing messages:', {
-      lastHistoryId,
-      notificationHistoryId,
-      email: 'info@appraisily.com'
-    });
-
-    // Initialize lastHistoryId if not set
+    // Initialize lastHistoryId if needed
     if (!lastHistoryId) {
       const profile = await gmail.users.getProfile({
         auth,
         userId: 'me'
       });
       lastHistoryId = profile.data.historyId;
-      logger.info('Initialized lastHistoryId:', { lastHistoryId });
-      return 0;
+      logger.info('Initialized historyId', { historyId: lastHistoryId });
+      return;
     }
 
-    // Fetch history
-    const historyResponse = await gmail.users.history.list({
+    // Get message history
+    const history = await gmail.users.history.list({
       auth,
       userId: 'me',
-      startHistoryId: lastHistoryId,
-      historyTypes: ['messageAdded']
+      startHistoryId: lastHistoryId
     });
 
-    logger.info('History response:', {
-      hasHistory: !!historyResponse.data.history,
-      historyCount: historyResponse.data.history?.length || 0,
-      startHistoryId: lastHistoryId,
-      endHistoryId: notificationHistoryId
+    logger.info('History retrieved', {
+      hasHistory: !!history.data.history,
+      count: history.data.history?.length || 0
     });
 
-    if (!historyResponse.data.history) {
-      logger.info('No new messages');
-      return 0;
+    if (!history.data.history) {
+      return;
     }
 
-    let processedCount = 0;
-    for (const history of historyResponse.data.history) {
-      if (!history.messagesAdded) continue;
+    // Process new messages
+    for (const item of history.data.history) {
+      if (!item.messages) continue;
 
-      for (const messageAdded of history.messagesAdded) {
-        try {
-          const messageData = await gmail.users.messages.get({
-            auth,
-            userId: 'me',
-            id: messageAdded.message.id,
-            format: 'full'
-          });
+      for (const message of item.messages) {
+        const fullMessage = await gmail.users.messages.get({
+          auth,
+          userId: 'me',
+          id: message.id
+        });
 
-          logger.info('Retrieved message:', {
-            messageId: messageData.data.id,
-            threadId: messageData.data.threadId,
-            snippet: messageData.data.snippet?.substring(0, 100)
-          });
-
-          processedCount++;
-          recordMetric('messages_processed', 1);
-        } catch (error) {
-          logger.error('Failed to process message:', {
-            messageId: messageAdded.message.id,
-            error: error.message
-          });
-          recordMetric('message_processing_failures', 1);
-        }
+        logger.info('New message', {
+          id: fullMessage.data.id,
+          snippet: fullMessage.data.snippet
+        });
       }
     }
 
-    // Update lastHistoryId
-    lastHistoryId = notificationHistoryId;
-    logger.info('Updated lastHistoryId:', {
-      oldHistoryId: lastHistoryId,
-      newHistoryId: notificationHistoryId,
-      processedCount
-    });
-
-    return processedCount;
+    lastHistoryId = notification.historyId;
+    logger.info('Updated historyId', { historyId: lastHistoryId });
   } catch (error) {
-    logger.error('Failed to process messages:', error);
+    logger.error('Webhook processing failed:', error);
     throw error;
   }
 }

@@ -1,21 +1,40 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
-import { recordMetric } from '../utils/monitoring.js';
-import { initializeGmailAuth } from './gmailAuth.js';
+import { getSecrets } from '../utils/secretManager.js';
 
 const gmail = google.gmail('v1');
 
+async function getGmailAuth() {
+  const secrets = await getSecrets();
+  
+  const auth = new google.auth.OAuth2(
+    secrets.GMAIL_CLIENT_ID,
+    secrets.GMAIL_CLIENT_SECRET
+  );
+
+  auth.setCredentials({
+    refresh_token: secrets.GMAIL_REFRESH_TOKEN
+  });
+
+  return auth;
+}
+
 export async function setupGmailWatch() {
   try {
-    const auth = await initializeGmailAuth();
-    const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
-
-    logger.info('Starting Gmail watch setup:', {
-      topicName,
-      email: 'info@appraisily.com'
+    const auth = await getGmailAuth();
+    
+    // First verify access
+    const profile = await gmail.users.getProfile({
+      auth,
+      userId: 'me'
+    });
+    
+    logger.info('Gmail profile verified', {
+      email: profile.data.emailAddress,
+      historyId: profile.data.historyId
     });
 
-    // Stop any existing watch
+    // Stop existing watch if any
     try {
       await gmail.users.stop({
         auth,
@@ -24,9 +43,7 @@ export async function setupGmailWatch() {
       logger.info('Stopped existing watch');
     } catch (error) {
       // Ignore if no watch exists
-      if (!error.message.includes('No watch exists')) {
-        throw error;
-      }
+      logger.info('No existing watch to stop');
     }
 
     // Set up new watch
@@ -34,28 +51,19 @@ export async function setupGmailWatch() {
       auth,
       userId: 'me',
       requestBody: {
-        topicName,
-        labelIds: ['INBOX'],
-        labelFilterBehavior: 'INCLUDE'
+        topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`,
+        labelIds: ['INBOX']
       }
     });
 
-    if (!watchResponse.data || !watchResponse.data.historyId) {
-      throw new Error('Invalid watch response');
-    }
-
-    logger.info('Gmail watch established:', {
+    logger.info('Watch setup complete', {
       historyId: watchResponse.data.historyId,
-      expiration: watchResponse.data.expiration,
-      email: 'info@appraisily.com',
-      response: JSON.stringify(watchResponse.data)
+      expiration: watchResponse.data.expiration
     });
 
-    recordMetric('gmail_watch_renewals', 1);
     return watchResponse.data;
   } catch (error) {
-    logger.error('Failed to setup Gmail watch:', error);
-    recordMetric('gmail_watch_renewal_failures', 1);
+    logger.error('Watch setup failed:', error);
     throw error;
   }
 }

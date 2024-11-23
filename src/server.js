@@ -8,36 +8,30 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// Webhook endpoint
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
-    logger.info('Received webhook request');
+    logger.info('Webhook received', { body: JSON.stringify(req.body) });
     await handleWebhook(req.body);
     res.status(200).send('OK');
   } catch (error) {
-    logger.error('Error processing webhook:', error);
-    res.status(500).send('Internal Server Error');
+    logger.error('Webhook error:', error);
+    res.status(500).send('Error');
   }
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy' });
 });
 
-// Start server
 async function startServer() {
   try {
-    // Initialize Gmail watch first
     await setupGmailWatch();
-    logger.info('Gmail watch initialized successfully');
-
-    // Start the server
+    
     app.listen(PORT, () => {
-      logger.info('Server started successfully', { port: PORT });
+      logger.info('Server started', { port: PORT });
     });
   } catch (error) {
-    logger.error('Failed to start server:', error);
+    logger.error('Startup error:', error);
     process.exit(1);
   }
 }
