@@ -1,9 +1,11 @@
 import express from 'express';
 import cron from 'node-cron';
-import { handleWebhook, initializeGmailWatch } from './services/gmailService.js';
 import { logger } from './utils/logger.js';
 import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
+import { setupGmailWatch, isWatchExpiringSoon } from './services/gmailWatch.js';
+import { verifyGmailAccess } from './services/gmailAuth.js';
+import { handleWebhook } from './services/gmailService.js';
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -30,9 +32,12 @@ app.get('/health', (req, res) => {
 // Initialize all services before starting the server
 async function initializeServices() {
   try {
-    logger.info('Starting service initialization...', { env: process.env.NODE_ENV });
+    logger.info('Starting service initialization...', { 
+      env: process.env.NODE_ENV,
+      email: 'info@appraisily.com'
+    });
     
-    const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION', 'GMAIL_USER_EMAIL'];
+    const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION'];
     const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
     
     if (missingEnvVars.length > 0) {
@@ -47,8 +52,12 @@ async function initializeServices() {
     await setupMetrics();
     logger.info('Metrics setup completed');
 
+    // Verify Gmail access
+    await verifyGmailAccess();
+    logger.info('Gmail access verified successfully');
+
     // Initialize Gmail watch
-    await initializeGmailWatch();
+    await setupGmailWatch();
     logger.info('Gmail watch initialized successfully');
 
     isInitialized = true;
@@ -77,42 +86,13 @@ app.post('/api/gmail/webhook', async (req, res) => {
       messageData: req.body?.message?.data ? 'present' : 'missing'
     });
 
-    const message = req.body.message;
-    if (!message?.data) {
-      logger.warn('Invalid webhook payload', { body: req.body });
-      return res.status(400).json({
-        error: 'Invalid webhook payload',
-        status: 'error'
-      });
+    // Check if watch needs renewal
+    if (isWatchExpiringSoon()) {
+      logger.info('Watch expiring soon, initiating renewal');
+      await setupGmailWatch();
     }
 
-    const decodedData = Buffer.from(message.data, 'base64').toString();
-    let parsedData;
-    
-    try {
-      parsedData = JSON.parse(decodedData);
-      logger.info('📨 Gmail Webhook Data', {
-        historyId: parsedData.historyId,
-        emailAddress: parsedData.emailAddress,
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      logger.error('Failed to parse webhook data', { error: error.message });
-      return res.status(400).json({
-        error: 'Invalid message format',
-        status: 'error'
-      });
-    }
-
-    if (!parsedData.historyId) {
-      logger.warn('No historyId in webhook data');
-      return res.status(400).json({
-        error: 'No historyId provided',
-        status: 'error'
-      });
-    }
-
-    await handleWebhook(parsedData);
+    await handleWebhook(req.body);
     res.status(200).json({ status: 'success' });
   } catch (error) {
     logger.error('Error processing webhook:', error);
@@ -127,7 +107,7 @@ app.post('/api/gmail/webhook', async (req, res) => {
 cron.schedule('0 0 */6 * *', async () => {
   try {
     logger.info('Running scheduled Gmail watch renewal');
-    await initializeGmailWatch();
+    await setupGmailWatch();
     logger.info('Gmail watch renewed successfully');
   } catch (error) {
     logger.error('Failed to renew Gmail watch:', error);
@@ -137,10 +117,8 @@ cron.schedule('0 0 */6 * *', async () => {
 // Initialize services before starting server
 async function startServer() {
   try {
-    // Initialize all services first
     await initializeServices();
 
-    // Start server only after successful initialization
     const server = app.listen(PORT, () => {
       logger.info('Server started successfully', {
         port: PORT,
