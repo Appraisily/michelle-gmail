@@ -6,28 +6,14 @@ import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
 
 const app = express();
-// Increase JSON payload limit for larger messages
 app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
 
-// Track processed message IDs to prevent duplicates
-const processedMessages = new Set();
-const MESSAGE_RETENTION_TIME = 60 * 60 * 1000; // 1 hour
-
-// Cleanup old processed messages periodically
-setInterval(() => {
-  const now = Date.now();
-  processedMessages.clear();
-  logger.info('Cleared processed messages cache');
-}, MESSAGE_RETENTION_TIME);
-
-// Initialize services
 async function initializeServices() {
   try {
     logger.info('Starting service initialization...');
     
-    // Validate required environment variables
     const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION', 'GMAIL_USER_EMAIL'];
     const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
     
@@ -42,15 +28,12 @@ async function initializeServices() {
       gmailUser: process.env.GMAIL_USER_EMAIL
     });
     
-    // Load secrets first
     await getSecrets();
     logger.info('Secrets loaded successfully');
     
-    // Setup monitoring
     await setupMetrics();
     logger.info('Metrics setup completed');
 
-    // Initial Gmail watch setup
     try {
       await renewGmailWatch();
       logger.info('Initial Gmail watch setup completed');
@@ -80,102 +63,58 @@ cron.schedule('0 0 */6 * *', async () => {
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
     logger.info('Received webhook request', {
-      headers: req.headers,
       bodySize: JSON.stringify(req.body).length,
-      hasMessage: !!req.body?.message,
-      messageId: req.body?.message?.messageId
+      hasMessage: !!req.body?.message
     });
 
     const message = req.body.message;
     if (!message) {
-      logger.warn('No message received in webhook', { 
-        body: JSON.stringify(req.body),
-        contentType: req.headers['content-type']
-      });
+      logger.warn('No message in webhook body', { body: req.body });
       return res.status(400).send('No message received');
     }
 
-    // Log full message structure for debugging
-    logger.info('Pub/Sub message structure', {
-      messageId: message.messageId,
-      publishTime: message.publishTime,
-      attributes: message.attributes,
-      hasData: !!message.data,
-      dataSize: message.data ? message.data.length : 0
-    });
-
-    // Check for duplicate messages
-    if (processedMessages.has(message.messageId)) {
-      logger.info('Duplicate message received, skipping', { messageId: message.messageId });
-      return res.status(200).send('Message already processed');
-    }
-
     if (!message.data) {
-      logger.warn('No data field in message', { 
-        message: JSON.stringify(message),
-        messageKeys: Object.keys(message)
-      });
-      return res.status(400).send('No data field in message');
+      logger.warn('No data in Pub/Sub message', { message });
+      return res.status(400).send('No data in message');
     }
 
-    // Decode and parse the message data
+    // Decode base64 data
     const decodedData = Buffer.from(message.data, 'base64').toString();
-    logger.info('Decoded message data', { 
-      decodedData,
-      decodedLength: decodedData.length,
-      isJSON: isValidJSON(decodedData)
-    });
+    logger.info('Decoded Pub/Sub data', { decodedData });
 
     let parsedData;
     try {
       parsedData = JSON.parse(decodedData);
-      logger.info('Parsed message data', { 
-        parsedData,
-        hasHistoryId: !!parsedData?.historyId,
-        historyId: parsedData?.historyId
+      logger.info('Parsed notification data', { 
+        emailHistoryId: parsedData.historyId,
+        hasHistoryId: !!parsedData.historyId
       });
-    } catch (parseError) {
-      logger.error('Failed to parse message data', { 
-        error: parseError.message,
-        decodedData 
-      });
-      return res.status(400).send('Invalid message data format');
+    } catch (error) {
+      logger.error('Failed to parse message data', { error, decodedData });
+      return res.status(400).send('Invalid message format');
     }
 
-    // Process the webhook data
+    if (!parsedData.historyId) {
+      logger.warn('No historyId in notification', { parsedData });
+      return res.status(400).send('No historyId in notification');
+    }
+
+    // Process the notification
     await handleWebhook(parsedData);
-    
-    // Mark message as processed
-    processedMessages.add(message.messageId);
-    
     res.status(200).send('Notification processed successfully');
   } catch (error) {
     logger.error('Error processing webhook:', {
       error: error.message,
-      stack: error.stack,
-      body: JSON.stringify(req.body)
+      stack: error.stack
     });
-    // Return 500 to trigger Pub/Sub retry
     res.status(500).send('Error processing notification');
   }
 });
 
-// Helper function to check if a string is valid JSON
-function isValidJSON(str) {
-  try {
-    JSON.parse(str);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).send('OK');
 });
 
-// Initialize services and start server
 initializeServices().then(() => {
   app.listen(PORT, () => {
     logger.info(`Server running on port ${PORT}`);

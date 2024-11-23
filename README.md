@@ -2,6 +2,42 @@
 
 This service automatically processes incoming emails using Gmail API watch notifications, OpenAI for classification and response generation, and logs activities to Google Sheets.
 
+## Email Processing Flow
+
+1. **Gmail Watch Setup**
+   - Service establishes a watch on the Gmail inbox
+   - Gmail monitors for new emails or label changes
+   - When changes occur, Gmail sends notifications to a Pub/Sub topic
+
+2. **Notification Process**
+   - Gmail → Pub/Sub notification (contains historyId)
+   - Webhook receives notification
+   - Service fetches changes using historyId
+   - Full email content retrieved
+   - Email processed and classified
+   - Automatic response generated if needed
+
+3. **Technical Flow Details**
+   ```
+   Gmail Inbox
+     ↓
+   Gmail Watch API
+     ↓
+   Pub/Sub Topic (historyId only)
+     ↓
+   Webhook
+     ↓
+   Gmail API (fetch history)
+     ↓
+   Gmail API (fetch full message)
+     ↓
+   OpenAI (classification)
+     ↓
+   Gmail API (send reply)
+     ↓
+   Google Sheets (logging)
+   ```
+
 ## Required Permissions
 
 ### 1. Service Account Permissions
@@ -142,3 +178,9 @@ If the Gmail watch is not working:
    ```bash
    gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=michelle-gmail" --limit=50
    ```
+
+4. Common Issues:
+   - Empty notifications: Check Gmail Watch setup and permissions
+   - Missing historyId: Verify Gmail API authentication
+   - Processing failures: Check OpenAI API key and quotas
+   - Reply failures: Verify Gmail send permissions
