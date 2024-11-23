@@ -7,6 +7,7 @@ import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
 let lastHistoryId = null;
+let watchExpiration = null;
 
 async function getGmailAuth() {
   const secrets = await getSecrets();
@@ -29,6 +30,7 @@ async function stopExistingWatch(auth) {
       userId: 'me'
     });
     logger.info('Stopped existing Gmail watch');
+    watchExpiration = null;
   } catch (error) {
     // Ignore errors if no watch exists
     if (!error.message.includes('No watch exists')) {
@@ -37,11 +39,34 @@ async function stopExistingWatch(auth) {
   }
 }
 
+async function initializeHistoryId(auth) {
+  try {
+    const profile = await gmail.users.getProfile({
+      auth,
+      userId: 'me'
+    });
+
+    lastHistoryId = profile.data.historyId;
+    logger.info('Initialized history ID from profile', {
+      historyId: lastHistoryId
+    });
+    return lastHistoryId;
+  } catch (error) {
+    logger.error('Failed to initialize history ID:', error);
+    throw error;
+  }
+}
+
 export async function initializeGmailWatch() {
   try {
     logger.info('Starting Gmail watch initialization...');
     const auth = await getGmailAuth();
     logger.info('Gmail credentials and permissions verified successfully');
+
+    // Initialize history ID if not set
+    if (!lastHistoryId) {
+      await initializeHistoryId(auth);
+    }
 
     // Stop any existing watch
     await stopExistingWatch(auth);
@@ -57,15 +82,23 @@ export async function initializeGmailWatch() {
       }
     });
 
+    watchExpiration = watchResponse.data.expiration;
+    
     logger.info('Gmail watch setup successful', {
       historyId: watchResponse.data.historyId,
-      expiration: watchResponse.data.expiration
+      expiration: new Date(parseInt(watchExpiration)).toISOString(),
+      currentHistoryId: lastHistoryId
     });
 
-    // Initialize lastHistoryId
-    lastHistoryId = watchResponse.data.historyId;
-    recordMetric('gmail_watch_renewals', 1);
+    // Update lastHistoryId if the new one is more recent
+    if (!lastHistoryId || parseInt(watchResponse.data.historyId) > parseInt(lastHistoryId)) {
+      lastHistoryId = watchResponse.data.historyId;
+      logger.info('Updated lastHistoryId from watch response', {
+        historyId: lastHistoryId
+      });
+    }
 
+    recordMetric('gmail_watch_renewals', 1);
     return watchResponse.data;
   } catch (error) {
     logger.error('Failed to initialize Gmail watch:', error);
@@ -74,20 +107,36 @@ export async function initializeGmailWatch() {
   }
 }
 
-export async function handleWebhook(data) {
+export async function handleWebhook(rawData) {
   try {
+    // Decode base64 data if it exists
+    let data;
+    if (rawData.message && rawData.message.data) {
+      const decodedData = Buffer.from(rawData.message.data, 'base64').toString();
+      data = JSON.parse(decodedData);
+    } else {
+      data = rawData;
+    }
+
     logger.info('📨 Gmail Webhook Data Received', {
       historyId: data.historyId,
       emailAddress: data.emailAddress,
       timestamp: new Date().toISOString(),
-      data: JSON.stringify(data)
+      decodedData: JSON.stringify(data)
     });
+
+    // Check if watch needs renewal
+    if (watchExpiration && Date.now() > parseInt(watchExpiration) - 24 * 60 * 60 * 1000) {
+      logger.info('Watch expiring soon, initiating renewal');
+      await initializeGmailWatch();
+    }
 
     const processedCount = await processNewMessages(data.historyId);
     
     logger.info('Webhook processing completed', {
       processedCount,
-      historyId: data.historyId
+      historyId: data.historyId,
+      currentHistoryId: lastHistoryId
     });
 
     return processedCount;
@@ -116,15 +165,7 @@ async function processNewMessages(notificationHistoryId) {
 
     // If no lastHistoryId, initialize from current state
     if (!lastHistoryId) {
-      const profile = await gmail.users.getProfile({ 
-        auth,
-        userId: 'me' 
-      });
-      lastHistoryId = profile.data.historyId;
-      logger.info('Initialized lastHistoryId', { 
-        lastHistoryId,
-        notificationHistoryId
-      });
+      await initializeHistoryId(auth);
       return 0;
     }
 
@@ -147,6 +188,8 @@ async function processNewMessages(notificationHistoryId) {
         hasHistory: !!historyResponse.data.history,
         historyCount: historyResponse.data.history?.length || 0,
         nextPageToken: !!historyResponse.data.nextPageToken,
+        startHistoryId: lastHistoryId,
+        endHistoryId: notificationHistoryId,
         historyData: JSON.stringify(historyResponse.data)
       });
 
@@ -157,16 +200,7 @@ async function processNewMessages(notificationHistoryId) {
           notificationHistoryId,
           error: error.message 
         });
-        const profile = await gmail.users.getProfile({ 
-          auth,
-          userId: 'me' 
-        });
-        lastHistoryId = profile.data.historyId;
-        logger.info('Reset lastHistoryId', {
-          oldHistoryId: lastHistoryId,
-          newHistoryId: profile.data.historyId,
-          notificationHistoryId
-        });
+        await initializeHistoryId(auth);
         return 0;
       }
       throw error;
