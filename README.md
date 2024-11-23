@@ -41,6 +41,7 @@ The following environment variables are required:
 ### Core Environment Variables
 ```
 PROJECT_ID=your-gcp-project-id                    # Your Google Cloud Project ID
+GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id       # Alternative Project ID variable
 PUBSUB_TOPIC=gmail-notifications-michelle         # The Pub/Sub topic name for Gmail notifications
 PUBSUB_SUBSCRIPTION=gmail-notifications-sub-michelle  # The Pub/Sub subscription name
 GMAIL_USER_EMAIL=info@appraisily.com             # The Gmail address being monitored

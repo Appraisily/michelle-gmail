@@ -72,15 +72,19 @@ app.post('/api/gmail/webhook', async (req, res) => {
   try {
     const message = req.body.message;
     if (!message) {
-      logger.warn('No Pub/Sub message received');
-      return res.status(400).send('No Pub/Sub message received');
+      logger.warn('No message data received');
+      return res.status(400).send('No message data received');
     }
 
-    // Verify the subscription
-    const subscription = message.attributes?.subscription;
-    if (subscription !== process.env.PUBSUB_SUBSCRIPTION) {
-      logger.warn(`Invalid subscription: ${subscription}`);
-      return res.status(400).send('Invalid subscription');
+    logger.info('Received webhook notification', {
+      messageId: message.messageId,
+      publishTime: message.publishTime,
+      data: message.data ? 'present' : 'missing'
+    });
+
+    if (!message.data) {
+      logger.warn('No message data present');
+      return res.status(400).send('No message data present');
     }
 
     const data = Buffer.from(message.data, 'base64').toString();
