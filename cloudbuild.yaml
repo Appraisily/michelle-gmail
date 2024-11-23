@@ -24,7 +24,7 @@ steps:
       - '--set-secrets'
       - 'GMAIL_CLIENT_ID=GMAIL_CLIENT_ID:latest,GMAIL_CLIENT_SECRET=GMAIL_CLIENT_SECRET:latest,GMAIL_REFRESH_TOKEN=GMAIL_REFRESH_TOKEN:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,SHEET_ID=MICHELLE_CHAT_LOG_SPREADSHEETID:latest'
       - '--set-env-vars'
-      - 'PROJECT_ID=$PROJECT_ID,PUBSUB_TOPIC=gmail-notifications,PUBSUB_SUBSCRIPTION=gmail-notifications-sub,GMAIL_USER_EMAIL=info@appraisily.com,NODE_ENV=production'
+      - 'PROJECT_ID=$PROJECT_ID,PUBSUB_TOPIC=gmail-notifications-michelle,PUBSUB_SUBSCRIPTION=gmail-notifications-sub-michelle,GMAIL_USER_EMAIL=info@appraisily.com,NODE_ENV=production'
       - '--memory'
       - '512Mi'
       - '--cpu'
