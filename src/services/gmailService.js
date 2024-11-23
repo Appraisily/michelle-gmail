@@ -7,6 +7,7 @@ import { recordMetric } from '../utils/monitoring.js';
 
 const gmail = google.gmail('v1');
 let auth = null;
+let lastHistoryId = null;
 
 async function getGmailAuth() {
   if (!auth) {
@@ -24,8 +25,9 @@ async function getGmailAuth() {
     // Verify the credentials work
     try {
       const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-      await gmail.users.getProfile({ userId: 'me' });
-      logger.info('Gmail credentials verified successfully');
+      const profile = await gmail.users.getProfile({ userId: 'me' });
+      lastHistoryId = profile.data.historyId;
+      logger.info('Gmail credentials verified successfully', { historyId: lastHistoryId });
     } catch (error) {
       logger.error('Gmail credentials verification failed:', error);
       throw new Error('Gmail authentication failed');
@@ -41,52 +43,87 @@ async function processNewMessages(startHistoryId) {
   const auth = await getGmailAuth();
   
   try {
-    logger.info('Fetching message history', { startHistoryId });
+    logger.info('Fetching message history', { 
+      startHistoryId,
+      lastKnownHistoryId: lastHistoryId 
+    });
     
+    // If no startHistoryId provided, use the last known one
+    const historyId = startHistoryId || lastHistoryId;
+    if (!historyId) {
+      logger.warn('No history ID available');
+      return 0;
+    }
+
     const response = await gmail.users.history.list({
       auth,
       userId: 'me',
-      startHistoryId,
-      historyTypes: ['messageAdded']
+      startHistoryId: historyId,
+      historyTypes: ['messageAdded', 'labelsAdded'],
+      labelId: 'INBOX'
     });
 
     if (!response.data.history) {
-      logger.info('No new messages in history', { startHistoryId });
+      logger.info('No new messages in history', { historyId });
       return 0;
     }
 
     logger.info('Found messages in history', { 
       historyCount: response.data.history.length,
-      startHistoryId 
+      historyId 
     });
 
     let processedCount = 0;
     for (const history of response.data.history) {
-      for (const message of history.messagesAdded || []) {
+      // Update last known history ID
+      lastHistoryId = history.id;
+      
+      const messages = [
+        ...(history.messagesAdded || []),
+        ...(history.labelsAdded || []).filter(label => 
+          label.labelIds.includes('INBOX')
+        )
+      ];
+
+      for (const messageInfo of messages) {
+        const message = messageInfo.message || messageInfo;
         try {
           logger.info('Processing message', { 
-            messageId: message.message.id,
-            threadId: message.message.threadId 
+            messageId: message.id,
+            threadId: message.threadId 
           });
 
           const messageData = await gmail.users.messages.get({
             auth,
             userId: 'me',
-            id: message.message.id,
+            id: message.id,
             format: 'full'
           });
+
+          // Extract email body from payload
+          let body = messageData.data.snippet;
+          if (messageData.data.payload) {
+            const parts = messageData.data.payload.parts || [messageData.data.payload];
+            for (const part of parts) {
+              if (part.mimeType === 'text/plain' && part.body.data) {
+                body = Buffer.from(part.body.data, 'base64').toString('utf8');
+                break;
+              }
+            }
+          }
 
           const emailContent = {
             id: messageData.data.id,
             threadId: messageData.data.threadId,
             subject: messageData.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value,
             from: messageData.data.payload.headers.find(h => h.name.toLowerCase() === 'from')?.value,
-            body: messageData.data.snippet
+            body: body
           };
 
           logger.info('Email content retrieved', {
             subject: emailContent.subject,
             from: emailContent.from,
+            bodyLength: emailContent.body.length,
             snippet: emailContent.body.substring(0, 100) + '...'
           });
 
@@ -139,7 +176,7 @@ async function processNewMessages(startHistoryId) {
           recordMetric('emails_processed', 1);
         } catch (error) {
           logger.error('Error processing message:', {
-            messageId: message.message.id,
+            messageId: message.id,
             error: error.message,
             stack: error.stack
           });
@@ -164,13 +201,21 @@ export async function handleWebhook(data) {
   const startTime = Date.now();
 
   try {
-    const processedCount = await processNewMessages(data.historyId);
+    // If we don't get a historyId in the notification, use the last known one
+    const historyId = data?.historyId || lastHistoryId;
+    if (!historyId) {
+      logger.warn('No history ID available in webhook or last known');
+      return;
+    }
+
+    const processedCount = await processNewMessages(historyId);
     
     const processingTime = Date.now() - startTime;
     logger.info('Webhook processing completed', {
       processed: processedCount > 0,
       messages: processedCount,
-      processingTime
+      processingTime,
+      historyId
     });
   } catch (error) {
     logger.error('Error in webhook handler:', {
@@ -195,6 +240,8 @@ export async function renewGmailWatch() {
         auth
       });
       logger.info('Stopped existing Gmail watch');
+      // Wait a moment to ensure the stop takes effect
+      await new Promise(resolve => setTimeout(resolve, 1000));
     } catch (error) {
       // If no watch exists, that's fine
       if (error.code !== 404) {
@@ -213,9 +260,13 @@ export async function renewGmailWatch() {
       }
     });
 
+    // Store the initial historyId
+    lastHistoryId = response.data.historyId;
+
     logger.info('Gmail watch renewed successfully', {
       historyId: response.data.historyId,
-      expiration: new Date(parseInt(response.data.expiration)).toISOString()
+      expiration: new Date(parseInt(response.data.expiration)).toISOString(),
+      topicName
     });
 
     recordMetric('gmail_watch_renewals', 1);
