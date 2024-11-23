@@ -24,9 +24,11 @@ export async function stopExistingWatch() {
 
 export async function setupGmailWatch() {
   try {
+    const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
+    
     logger.info('Starting Gmail watch setup...', {
       email: 'info@appraisily.com',
-      topic: process.env.PUBSUB_TOPIC,
+      topicName,
       projectId: process.env.PROJECT_ID
     });
 
@@ -35,15 +37,26 @@ export async function setupGmailWatch() {
     // Stop any existing watch first
     await stopExistingWatch();
 
-    const watchResponse = await gmail.users.watch({
+    // Set up the watch request
+    const watchRequest = {
       auth,
       userId: 'me',
       requestBody: {
-        topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`,
-        labelIds: ['INBOX'],
-        labelFilterAction: 'include'
+        topicName,
+        labelIds: ['INBOX', 'UNREAD'],
+        labelFilterBehavior: 'INCLUDE',
       }
+    };
+
+    logger.info('Sending watch request', {
+      request: JSON.stringify(watchRequest.requestBody)
     });
+
+    const watchResponse = await gmail.users.watch(watchRequest);
+
+    if (!watchResponse.data || !watchResponse.data.historyId) {
+      throw new Error('Invalid watch response: No historyId received');
+    }
 
     watchExpiration = watchResponse.data.expiration;
 
@@ -54,12 +67,26 @@ export async function setupGmailWatch() {
       watchData: JSON.stringify(watchResponse.data)
     });
 
+    // Verify the watch was set up correctly
+    const profile = await gmail.users.getProfile({
+      auth,
+      userId: 'me'
+    });
+
+    logger.info('Gmail profile after watch setup', {
+      email: profile.data.emailAddress,
+      historyId: profile.data.historyId,
+      messagesTotal: profile.data.messagesTotal,
+      threadsTotal: profile.data.threadsTotal
+    });
+
     recordMetric('gmail_watch_renewals', 1);
     return watchResponse.data;
   } catch (error) {
     logger.error('Failed to setup Gmail watch:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`
     });
     recordMetric('gmail_watch_renewal_failures', 1);
     throw error;
