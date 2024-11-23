@@ -229,20 +229,38 @@ export async function processNewMessages(notificationHistoryId) {
 
 export async function handleWebhook(rawData) {
   try {
-    logger.info('Webhook data received', {
-      rawData: JSON.stringify(rawData)
+    // Log the raw webhook data first
+    logger.info('Raw webhook data received:', {
+      data: JSON.stringify(rawData, null, 2)
     });
 
     let data;
     if (rawData.message && rawData.message.data) {
-      const decodedData = Buffer.from(rawData.message.data, 'base64').toString();
-      data = JSON.parse(decodedData);
-      logger.info('Decoded webhook data', {
-        decodedData: JSON.stringify(data)
-      });
+      const base64Data = rawData.message.data;
+      logger.info('Base64 data received:', { base64Data });
+
+      const decodedData = Buffer.from(base64Data, 'base64').toString();
+      logger.info('Decoded string:', { decodedData });
+
+      try {
+        data = JSON.parse(decodedData);
+        logger.info('Parsed webhook data:', {
+          historyId: data.historyId,
+          emailAddress: data.emailAddress,
+          data: JSON.stringify(data)
+        });
+      } catch (parseError) {
+        logger.error('Failed to parse decoded data:', {
+          decodedData,
+          error: parseError.message
+        });
+        throw parseError;
+      }
     } else {
       data = rawData;
-      logger.info('Using raw webhook data (no base64 encoding)');
+      logger.info('Using raw webhook data (no base64):', {
+        data: JSON.stringify(data)
+      });
     }
 
     if (!data.historyId) {
