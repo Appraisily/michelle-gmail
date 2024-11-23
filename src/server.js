@@ -1,147 +1,123 @@
 import express from 'express';
-import cron from 'node-cron';
-import { logger } from './utils/logger.js';
-import { setupMetrics } from './utils/monitoring.js';
+import { google } from 'googleapis';
 import { getSecrets } from './utils/secretManager.js';
-import { setupGmailWatch, isWatchExpiringSoon } from './services/gmailWatch.js';
-import { verifyGmailAccess } from './services/gmailAuth.js';
-import { handleWebhook } from './services/gmailService.js';
+import { logger } from './utils/logger.js';
 
 const app = express();
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
-let isInitialized = false;
-let initializationError = null;
+let gmail;
+let lastHistoryId;
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  if (initializationError) {
-    return res.status(500).json({
-      status: 'error',
-      error: initializationError.message
-    });
-  }
-
-  res.status(200).json({
-    status: isInitialized ? 'healthy' : 'initializing',
-    uptime: process.uptime()
-  });
-});
-
-// Initialize all services before starting the server
-async function initializeServices() {
+async function initializeGmail() {
   try {
-    logger.info('Starting service initialization...', { 
-      env: process.env.NODE_ENV,
-      email: 'info@appraisily.com'
+    const secrets = await getSecrets();
+    
+    const oauth2Client = new google.auth.OAuth2(
+      secrets.GMAIL_CLIENT_ID,
+      secrets.GMAIL_CLIENT_SECRET
+    );
+
+    oauth2Client.setCredentials({
+      refresh_token: secrets.GMAIL_REFRESH_TOKEN
+    });
+
+    gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    
+    // Get initial profile and history ID
+    const profile = await gmail.users.getProfile({
+      userId: 'me'
     });
     
-    const requiredEnvVars = ['PROJECT_ID', 'PUBSUB_TOPIC', 'PUBSUB_SUBSCRIPTION'];
-    const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+    lastHistoryId = profile.data.historyId;
     
-    if (missingEnvVars.length > 0) {
-      throw new Error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
-    }
+    logger.info('Gmail initialized', {
+      email: profile.data.emailAddress,
+      historyId: lastHistoryId
+    });
 
-    // Load secrets first
-    await getSecrets();
-    logger.info('Secrets loaded successfully');
+    // Set up Gmail watch
+    const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
     
-    // Setup monitoring
-    await setupMetrics();
-    logger.info('Metrics setup completed');
+    await gmail.users.watch({
+      userId: 'me',
+      requestBody: {
+        topicName,
+        labelIds: ['INBOX'],
+        labelFilterBehavior: 'INCLUDE'
+      }
+    });
 
-    // Verify Gmail access
-    await verifyGmailAccess();
-    logger.info('Gmail access verified successfully');
-
-    // Initialize Gmail watch
-    await setupGmailWatch();
-    logger.info('Gmail watch initialized successfully');
-
-    isInitialized = true;
-    initializationError = null;
-    logger.info('All services initialized successfully');
+    logger.info('Gmail watch set up successfully', { topicName });
   } catch (error) {
-    initializationError = error;
-    logger.error('Failed to initialize services:', error);
+    logger.error('Failed to initialize Gmail:', error);
     throw error;
   }
 }
 
-// Webhook endpoint
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
-    if (!isInitialized) {
-      logger.warn('Received webhook before initialization completed');
-      return res.status(503).json({
-        error: 'Service still initializing',
-        status: 'error'
-      });
+    const message = req.body.message;
+    if (!message?.data) {
+      return res.status(400).send('Invalid request');
     }
 
-    logger.info('Received webhook request:', {
-      headers: req.headers,
-      body: JSON.stringify(req.body)
+    const decodedData = Buffer.from(message.data, 'base64').toString();
+    const data = JSON.parse(decodedData);
+
+    logger.info('Webhook received', {
+      historyId: data.historyId,
+      email: data.emailAddress
     });
 
-    // Check if watch needs renewal
-    if (isWatchExpiringSoon()) {
-      logger.info('Watch expiring soon, initiating renewal');
-      await setupGmailWatch();
+    if (!lastHistoryId) {
+      lastHistoryId = data.historyId;
+      return res.status(200).send('OK');
     }
 
-    await handleWebhook(req.body);
-    res.status(200).json({ status: 'success' });
+    const history = await gmail.users.history.list({
+      userId: 'me',
+      startHistoryId: lastHistoryId,
+      historyTypes: ['messageAdded']
+    });
+
+    if (history.data.history) {
+      for (const record of history.data.history) {
+        for (const msg of record.messagesAdded || []) {
+          const message = await gmail.users.messages.get({
+            userId: 'me',
+            id: msg.message.id
+          });
+
+          logger.info('New email received', {
+            id: message.data.id,
+            threadId: message.data.threadId,
+            snippet: message.data.snippet
+          });
+        }
+      }
+    }
+
+    lastHistoryId = data.historyId;
+    res.status(200).send('OK');
   } catch (error) {
-    logger.error('Error processing webhook:', error);
-    res.status(500).json({
-      error: 'Internal server error',
-      status: 'error'
-    });
+    logger.error('Webhook error:', error);
+    res.status(500).send('Internal Server Error');
   }
 });
 
-// Schedule Gmail watch renewal every 6 days
-cron.schedule('0 0 */6 * *', async () => {
-  try {
-    logger.info('Running scheduled Gmail watch renewal');
-    await setupGmailWatch();
-    logger.info('Gmail watch renewed successfully');
-  } catch (error) {
-    logger.error('Failed to renew Gmail watch:', error);
-  }
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
 });
 
-// Initialize services before starting server
+// Start server
 async function startServer() {
   try {
-    await initializeServices();
-
-    const server = app.listen(PORT, () => {
-      logger.info('Server started successfully', {
-        port: PORT,
-        env: process.env.NODE_ENV,
-        initialized: isInitialized
-      });
-    });
-
-    // Graceful shutdown
-    process.on('SIGTERM', () => {
-      logger.info('SIGTERM received, shutting down...');
-      server.close(() => {
-        logger.info('Server closed');
-        process.exit(0);
-      });
-    });
-
-    process.on('SIGINT', () => {
-      logger.info('SIGINT received, shutting down...');
-      server.close(() => {
-        logger.info('Server closed');
-        process.exit(0);
-      });
+    await initializeGmail();
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
     });
   } catch (error) {
     logger.error('Failed to start server:', error);
@@ -149,14 +125,4 @@ async function startServer() {
   }
 }
 
-// Handle uncaught errors
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled rejection:', { reason, promise });
-});
-
-// Start the server
 startServer();
