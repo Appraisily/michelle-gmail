@@ -87,12 +87,30 @@ app.post('/api/gmail/webhook', async (req, res) => {
       return res.status(400).send('No message data present');
     }
 
-    const data = Buffer.from(message.data, 'base64').toString();
-    await handleWebhook(JSON.parse(data));
+    // Decode and log the message data
+    const decodedData = Buffer.from(message.data, 'base64').toString();
+    logger.info('Decoded webhook data:', {
+      rawData: decodedData,
+      parsedData: JSON.parse(decodedData)
+    });
+
+    const data = JSON.parse(decodedData);
+    logger.info('Processing Gmail notification:', {
+      emailHistoryId: data.historyId,
+      emailThreadId: data.threadId,
+      emailId: data.emailId,
+      labelIds: data.labelIds
+    });
+
+    await handleWebhook(data);
     
     res.status(200).send('Notification processed successfully');
   } catch (error) {
-    logger.error('Error processing webhook:', error);
+    logger.error('Error processing webhook:', {
+      error: error.message,
+      stack: error.stack,
+      body: req.body
+    });
     res.status(500).send('Error processing notification');
   }
 });
