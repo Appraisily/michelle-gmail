@@ -1,3 +1,53 @@
+import { google } from 'googleapis';
+import { classifyAndProcessEmail } from './openaiService.js';
+import { logEmailProcessing } from './sheetsService.js';
+import { logger } from '../utils/logger.js';
+import { getSecrets } from '../utils/secretManager.js';
+import { recordMetric } from '../utils/monitoring.js';
+
+const gmail = google.gmail('v1');
+let auth = null;
+let lastHistoryId = null;
+
+async function getGmailAuth() {
+  if (!auth) {
+    const secrets = await getSecrets();
+    const oauth2Client = new google.auth.OAuth2(
+      secrets.GMAIL_CLIENT_ID,
+      secrets.GMAIL_CLIENT_SECRET,
+      'https://developers.google.com/oauthplayground'
+    );
+
+    oauth2Client.setCredentials({
+      refresh_token: secrets.GMAIL_REFRESH_TOKEN
+    });
+
+    try {
+      const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+      const profile = await gmail.users.getProfile({ userId: 'me' });
+      
+      await gmail.users.labels.list({ userId: 'me' });
+      
+      lastHistoryId = profile.data.historyId;
+      logger.info('Gmail credentials and permissions verified successfully', { 
+        historyId: lastHistoryId,
+        email: profile.data.emailAddress 
+      });
+    } catch (error) {
+      logger.error('Gmail authentication failed:', {
+        error: error.message,
+        response: error.response?.data,
+        code: error.code,
+        status: error.response?.status
+      });
+      throw new Error(`Gmail authentication failed: ${error.message}`);
+    }
+
+    auth = oauth2Client;
+  }
+  return auth;
+}
+
 async function processNewMessages(notificationHistoryId) {
   const auth = await getGmailAuth();
   
@@ -222,6 +272,65 @@ async function processNewMessages(notificationHistoryId) {
       stack: error.stack
     });
     recordMetric('email_fetch_failures', 1);
+    throw error;
+  }
+}
+
+async function stopExistingWatch() {
+  try {
+    const auth = await getGmailAuth();
+    await gmail.users.stop({
+      userId: 'me',
+      auth
+    });
+    logger.info('Stopped existing Gmail watch');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  } catch (error) {
+    if (error.code === 404) {
+      logger.info('No existing Gmail watch to stop');
+    } else {
+      logger.warn('Error stopping existing Gmail watch:', {
+        error: error.message,
+        code: error.code
+      });
+    }
+  }
+}
+
+export async function initializeGmailWatch() {
+  try {
+    logger.info('Starting Gmail watch initialization...');
+    const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
+    logger.info(`Using Pub/Sub topic: ${topicName}`);
+
+    await stopExistingWatch();
+
+    const response = await gmail.users.watch({
+      auth: await getGmailAuth(),
+      userId: 'me',
+      requestBody: {
+        topicName,
+        labelIds: ['INBOX'],
+        labelFilterAction: 'include'
+      }
+    });
+
+    const expirationDate = new Date(parseInt(response.data.expiration));
+    logger.info('Gmail watch setup successful', {
+      historyId: response.data.historyId,
+      expiration: expirationDate.toISOString(),
+      topicName
+    });
+
+    recordMetric('gmail_watch_renewals', 1);
+    return response.data;
+  } catch (error) {
+    logger.error('Error in Gmail watch initialization:', {
+      error: error.message,
+      code: error.code,
+      details: error.response?.data || 'No additional details'
+    });
+    recordMetric('gmail_watch_renewal_failures', 1);
     throw error;
   }
 }
