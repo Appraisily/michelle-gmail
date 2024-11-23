@@ -1,55 +1,48 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
-import { getSecrets } from '../utils/secretManager.js';
 
 const sheets = google.sheets('v4');
 let auth = null;
-let spreadsheetId = null;
 
 async function getSheetAuth() {
   if (!auth) {
-    const secrets = await getSecrets();
-    const oauth2Client = new google.auth.OAuth2(
-      secrets.GMAIL_CLIENT_ID,
-      secrets.GMAIL_CLIENT_SECRET,
-      'https://developers.google.com/oauthplayground'
-    );
-
-    oauth2Client.setCredentials({
-      refresh_token: secrets.GMAIL_REFRESH_TOKEN
-    });
-
-    auth = oauth2Client;
+    try {
+      // Use Google Cloud's built-in authentication
+      const googleAuth = new google.auth.GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/spreadsheets']
+      });
+      
+      auth = await googleAuth.getClient();
+      logger.info('Google Sheets authentication initialized');
+    } catch (error) {
+      logger.error('Failed to initialize Google Sheets auth', {
+        error: error.message,
+        stack: error.stack
+      });
+      throw error;
+    }
   }
   return auth;
-}
-
-async function getSpreadsheetId() {
-  if (!spreadsheetId) {
-    const secrets = await getSecrets();
-    spreadsheetId = secrets.MICHELLE_CHAT_LOG_SPREADSHEETID;
-    if (!spreadsheetId) {
-      throw new Error('Spreadsheet ID not found in secrets');
-    }
-    logger.info('Retrieved spreadsheet ID from secrets');
-  }
-  return spreadsheetId;
 }
 
 export async function logEmailProcessing(logData) {
   try {
     const auth = await getSheetAuth();
-    const sheetId = await getSpreadsheetId();
-    
+    const spreadsheetId = process.env.MICHELLE_CHAT_LOG_SPREADSHEETID;
+
+    if (!spreadsheetId) {
+      throw new Error('Spreadsheet ID not found in environment variables');
+    }
+
     logger.info('Logging to Google Sheets', {
-      spreadsheetId: sheetId,
+      spreadsheetId,
       sender: logData.sender,
       subject: logData.subject
     });
 
     await sheets.spreadsheets.values.append({
       auth,
-      spreadsheetId: sheetId,
+      spreadsheetId,
       range: 'Logs!A:E',
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
@@ -65,7 +58,7 @@ export async function logEmailProcessing(logData) {
     });
 
     logger.info('Email processing logged successfully', {
-      spreadsheetId: sheetId,
+      spreadsheetId,
       timestamp: logData.timestamp
     });
   } catch (error) {
@@ -78,6 +71,5 @@ export async function logEmailProcessing(logData) {
         timestamp: logData.timestamp
       }
     });
-    // Don't throw the error to prevent breaking the main flow
   }
 }
