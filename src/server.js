@@ -53,11 +53,14 @@ cron.schedule('0 0 */6 * *', async () => {
 
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
+    // Log the complete raw request body
     logger.info('Received webhook request', {
+      rawBody: JSON.stringify(req.body),
       bodySize: JSON.stringify(req.body).length,
       hasMessage: !!req.body?.message,
       messageData: req.body?.message?.data ? 'present' : 'missing',
-      messageAttributes: JSON.stringify(req.body?.message?.attributes || {})
+      messageAttributes: req.body?.message?.attributes || {},
+      subscription: req.body?.message?.attributes?.subscription || 'not_provided'
     });
 
     const message = req.body.message;
@@ -73,7 +76,7 @@ app.post('/api/gmail/webhook', async (req, res) => {
 
     const decodedData = Buffer.from(message.data, 'base64').toString();
     logger.info('Decoded Pub/Sub data', { 
-      decodedData,
+      raw: decodedData,
       dataLength: decodedData.length 
     });
 
@@ -81,10 +84,10 @@ app.post('/api/gmail/webhook', async (req, res) => {
     try {
       parsedData = JSON.parse(decodedData);
       logger.info('Parsed notification data', { 
+        raw: parsedData,
         historyId: parsedData.historyId,
         emailAddress: parsedData.emailAddress,
         hasHistoryId: !!parsedData.historyId,
-        rawData: JSON.stringify(parsedData),
         subscriptionName: message.attributes?.subscription || 'not_provided'
       });
     } catch (error) {
