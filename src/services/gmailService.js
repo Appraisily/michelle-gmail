@@ -52,7 +52,8 @@ export async function initializeGmailWatch() {
       userId: 'me',
       requestBody: {
         topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`,
-        labelIds: ['INBOX']
+        labelIds: ['INBOX'],
+        labelFilterAction: 'include'
       }
     });
 
@@ -133,11 +134,13 @@ async function processNewMessages(notificationHistoryId) {
         notificationHistoryId
       });
 
+      // Fixed history types to match Gmail API requirements
       historyResponse = await gmail.users.history.list({
         auth,
         userId: 'me',
         startHistoryId: lastHistoryId,
-        historyTypes: ['messageAdded', 'labelsAdded']
+        historyTypes: ['messageAdded'], // Removed invalid 'labelsAdded'
+        maxResults: 100
       });
 
       logger.info('History response details', {
@@ -145,8 +148,7 @@ async function processNewMessages(notificationHistoryId) {
         historyCount: historyResponse.data.history?.length || 0,
         nextPageToken: !!historyResponse.data.nextPageToken,
         startHistoryId: lastHistoryId,
-        notificationHistoryId,
-        rawResponse: JSON.stringify(historyResponse.data)
+        notificationHistoryId
       });
 
     } catch (error) {
@@ -185,9 +187,7 @@ async function processNewMessages(notificationHistoryId) {
         historyId: history.id,
         lastHistoryId,
         notificationHistoryId,
-        messageCount: history.messagesAdded?.length || 0,
-        labelCount: history.labelsAdded?.length || 0,
-        rawHistory: JSON.stringify(history)
+        messageCount: history.messagesAdded?.length || 0
       });
 
       if (!history.messagesAdded) {
@@ -212,8 +212,7 @@ async function processNewMessages(notificationHistoryId) {
             messageId: messageAdded.message.id,
             threadId: messageAdded.message.threadId,
             historyId: history.id,
-            labelIds: messageAdded.message.labelIds,
-            rawMessage: JSON.stringify(messageAdded.message)
+            labelIds: messageAdded.message.labelIds
           });
 
           const messageData = await gmail.users.messages.get({
@@ -229,8 +228,7 @@ async function processNewMessages(notificationHistoryId) {
             historyId: history.id,
             snippet: messageData.data.snippet,
             hasPayload: !!messageData.data.payload,
-            labelIds: messageData.data.labelIds,
-            rawHeaders: JSON.stringify(messageData.data.payload?.headers)
+            labelIds: messageData.data.labelIds
           });
 
           const headers = messageData.data.payload?.headers || [];
@@ -248,8 +246,7 @@ async function processNewMessages(notificationHistoryId) {
             subject: emailContent.subject,
             from: emailContent.from,
             historyId: history.id,
-            bodyLength: emailContent.body.length,
-            hasBody: !!emailContent.body
+            bodyLength: emailContent.body.length
           });
 
           // Process email with OpenAI
