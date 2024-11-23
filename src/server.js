@@ -72,18 +72,18 @@ async function initializeServices() {
 
 // Webhook endpoint
 app.post('/api/gmail/webhook', async (req, res) => {
-  if (!isInitialized) {
-    logger.warn('Received webhook before initialization completed');
-    return res.status(503).json({
-      error: 'Service still initializing',
-      status: 'error'
-    });
-  }
-
   try {
-    logger.info('Received webhook request', {
-      hasMessage: !!req.body?.message,
-      messageData: req.body?.message?.data ? 'present' : 'missing'
+    if (!isInitialized) {
+      logger.warn('Received webhook before initialization completed');
+      return res.status(503).json({
+        error: 'Service still initializing',
+        status: 'error'
+      });
+    }
+
+    logger.info('Received webhook request:', {
+      headers: req.headers,
+      body: JSON.stringify(req.body)
     });
 
     // Check if watch needs renewal
