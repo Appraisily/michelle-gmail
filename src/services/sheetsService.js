@@ -1,7 +1,27 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
+import { getSecrets } from '../utils/secretManager.js';
 
 const sheets = google.sheets('v4');
+let auth = null;
+
+async function getSheetAuth() {
+  if (!auth) {
+    const secrets = await getSecrets();
+    const oauth2Client = new google.auth.OAuth2(
+      secrets.GMAIL_CLIENT_ID,
+      secrets.GMAIL_CLIENT_SECRET,
+      'https://developers.google.com/oauthplayground'
+    );
+
+    oauth2Client.setCredentials({
+      refresh_token: secrets.GMAIL_REFRESH_TOKEN
+    });
+
+    auth = oauth2Client;
+  }
+  return auth;
+}
 
 export async function logEmailProcessing(logData) {
   try {
@@ -27,6 +47,7 @@ export async function logEmailProcessing(logData) {
     logger.info('Email processing logged successfully');
   } catch (error) {
     logger.error('Error logging to Google Sheets:', error);
-    throw error;
+    // Don't throw the error to prevent breaking the main flow
+    // Just log it and continue
   }
 }

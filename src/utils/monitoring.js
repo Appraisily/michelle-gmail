@@ -1,7 +1,11 @@
 import monitoring from '@google-cloud/monitoring';
-const MonitoringServiceClient = monitoring.v3.MetricServiceClient;
+import { logger } from './logger.js';
 
+const MonitoringServiceClient = monitoring.v3.MetricServiceClient;
 const client = new MonitoringServiceClient();
+
+// Metric values cache
+const metricValues = new Map();
 
 const metrics = {
   'emails_processed': createMetric('emails_processed'),
@@ -22,14 +26,14 @@ function createMetric(name) {
     resource: {
       type: 'global',
       labels: {
-        project_id: process.env.PROJECT_ID
+        project_id: process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT_ID
       }
     }
   };
 }
 
 export async function setupMetrics() {
-  const projectPath = client.projectPath(process.env.PROJECT_ID);
+  const projectPath = client.projectPath(process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT_ID);
 
   for (const [metricName, metric] of Object.entries(metrics)) {
     try {
@@ -37,39 +41,62 @@ export async function setupMetrics() {
         name: metric.type,
         displayName: metricName,
         type: 'custom.googleapis.com/gmail_processor/' + metricName,
-        metricKind: 'GAUGE',
+        metricKind: 'CUMULATIVE',  // Changed from GAUGE to CUMULATIVE
         valueType: 'INT64',
         unit: '1',
-        description: `Tracks ${metricName.replace(/_/g, ' ')}`
+        description: `Tracks ${metricName.replace(/_/g, ' ')}`,
+        labels: [{
+          key: 'project_id',
+          valueType: 'STRING',
+          description: 'The ID of the GCP project'
+        }]
       };
 
       await client.createMetricDescriptor({
         name: projectPath,
         metricDescriptor: descriptor
       });
+
+      // Initialize metric value
+      metricValues.set(metricName, 0);
     } catch (error) {
-      console.error(`Error creating metric ${metricName}:`, error);
+      // Ignore errors if metric descriptor already exists
+      if (!error.message.includes('ALREADY_EXISTS')) {
+        logger.error(`Error creating metric ${metricName}:`, error);
+      }
     }
   }
 }
 
-export async function recordMetric(metricName, value) {
+export async function recordMetric(metricName, increment = 1) {
   if (!metrics[metricName]) {
-    throw new Error(`Unknown metric: ${metricName}`);
+    logger.warn(`Unknown metric: ${metricName}`);
+    return;
   }
 
   try {
-    const projectPath = client.projectPath(process.env.PROJECT_ID);
+    // Update cumulative value
+    const currentValue = metricValues.get(metricName) || 0;
+    const newValue = currentValue + increment;
+    metricValues.set(metricName, newValue);
+
+    const projectPath = client.projectPath(process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT_ID);
+    const startTime = new Date();
+    startTime.setHours(0, 0, 0, 0); // Start of the day
+
     const timeSeriesData = {
       metric: metrics[metricName],
       points: [{
         interval: {
+          startTime: {
+            seconds: Math.floor(startTime.getTime() / 1000)
+          },
           endTime: {
             seconds: Math.floor(Date.now() / 1000)
           }
         },
         value: {
-          int64Value: value
+          int64Value: newValue
         }
       }]
     };
@@ -78,7 +105,10 @@ export async function recordMetric(metricName, value) {
       name: projectPath,
       timeSeries: [timeSeriesData]
     });
+
+    logger.debug(`Metric ${metricName} recorded successfully`, { value: newValue });
   } catch (error) {
-    console.error(`Error recording metric ${metricName}:`, error);
+    logger.error(`Error recording metric ${metricName}:`, error);
+    // Don't throw the error to prevent breaking the main flow
   }
 }
