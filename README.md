@@ -2,6 +2,25 @@
 
 This service automatically processes incoming emails using Gmail API watch notifications, OpenAI for classification and response generation, and logs activities to Google Sheets.
 
+## Project Structure
+
+```
+├── src/
+│   ├── server.js              # Main application entry point
+│   ├── services/
+│   │   ├── gmailService.js    # Gmail API integration and watch management
+│   │   ├── openaiService.js   # OpenAI integration for email processing
+│   │   └── sheetsService.js   # Google Sheets logging integration
+│   └── utils/
+│       ├── logger.js          # Centralized logging configuration
+│       ├── monitoring.js      # Cloud Monitoring metrics setup
+│       └── secretManager.js   # Secret Manager integration
+├── Dockerfile                 # Container configuration
+├── cloudbuild.yaml           # Cloud Build deployment configuration
+├── package.json              # Project dependencies and scripts
+└── README.md                 # Project documentation
+```
+
 ## Service Requirements
 
 1. **Gmail Watch Management**
@@ -101,6 +120,7 @@ GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id       # Alternative Project ID varia
 PUBSUB_TOPIC=gmail-notifications-michelle         # The Pub/Sub topic name for Gmail notifications
 PUBSUB_SUBSCRIPTION=gmail-notifications-sub-michelle  # The Pub/Sub subscription name
 GMAIL_USER_EMAIL=info@appraisily.com             # The Gmail address being monitored
+NODE_ENV=production                               # Environment mode (production/development)
 ```
 
 ### Required Secrets
@@ -170,10 +190,11 @@ The service includes built-in monitoring using Cloud Monitoring:
 
 ## Logging
 
-Logs are available in:
-- Cloud Run logs
-- Custom application logs (error.log, combined.log)
-- Google Sheets activity log
+Logs are available in Cloud Run logs with the following severity levels:
+- ERROR: Critical failures requiring immediate attention
+- WARNING: Important issues that don't stop service operation
+- INFO: Normal operational events
+- DEBUG: Detailed information for troubleshooting (development only)
 
 ## Troubleshooting
 
