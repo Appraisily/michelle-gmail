@@ -11,6 +11,17 @@ app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
 
+// Track processed message IDs to prevent duplicates
+const processedMessages = new Set();
+const MESSAGE_RETENTION_TIME = 60 * 60 * 1000; // 1 hour
+
+// Cleanup old processed messages periodically
+setInterval(() => {
+  const now = Date.now();
+  processedMessages.clear();
+  logger.info('Cleared processed messages cache');
+}, MESSAGE_RETENTION_TIME);
+
 // Initialize services
 async function initializeServices() {
   try {
@@ -36,9 +47,7 @@ async function initializeServices() {
     logger.info('Secrets loaded successfully');
     
     // Setup monitoring
-    await setupMetrics().catch(error => {
-      logger.error('Failed to setup metrics:', error);
-    });
+    await setupMetrics();
     logger.info('Metrics setup completed');
 
     // Initial Gmail watch setup
@@ -81,6 +90,12 @@ app.post('/api/gmail/webhook', async (req, res) => {
       return res.status(400).send('No message received');
     }
 
+    // Check for duplicate messages
+    if (processedMessages.has(message.messageId)) {
+      logger.info('Duplicate message received, skipping', { messageId: message.messageId });
+      return res.status(200).send('Message already processed');
+    }
+
     logger.info('Processing Pub/Sub message', {
       messageId: message.messageId,
       publishTime: message.publishTime,
@@ -111,6 +126,9 @@ app.post('/api/gmail/webhook', async (req, res) => {
     // Process the webhook data
     await handleWebhook(parsedData);
     
+    // Mark message as processed
+    processedMessages.add(message.messageId);
+    
     res.status(200).send('Notification processed successfully');
   } catch (error) {
     logger.error('Error processing webhook:', {
@@ -118,6 +136,7 @@ app.post('/api/gmail/webhook', async (req, res) => {
       stack: error.stack,
       body: req.body
     });
+    // Return 500 to trigger Pub/Sub retry
     res.status(500).send('Error processing notification');
   }
 });

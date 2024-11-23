@@ -9,6 +9,16 @@ const gmail = google.gmail('v1');
 let auth = null;
 let lastHistoryId = null;
 
+// Track processed history IDs to prevent duplicates
+const processedHistoryIds = new Set();
+const HISTORY_RETENTION_TIME = 60 * 60 * 1000; // 1 hour
+
+// Cleanup old history IDs periodically
+setInterval(() => {
+  processedHistoryIds.clear();
+  logger.info('Cleared processed history IDs cache');
+}, HISTORY_RETENTION_TIME);
+
 async function getGmailAuth() {
   if (!auth) {
     const secrets = await getSecrets();
@@ -55,6 +65,12 @@ async function processNewMessages(startHistoryId) {
       return 0;
     }
 
+    // Check if we've already processed this history ID
+    if (processedHistoryIds.has(historyId)) {
+      logger.info('History ID already processed, skipping', { historyId });
+      return 0;
+    }
+
     const response = await gmail.users.history.list({
       auth,
       userId: 'me',
@@ -65,6 +81,7 @@ async function processNewMessages(startHistoryId) {
 
     if (!response.data.history) {
       logger.info('No new messages in history', { historyId });
+      processedHistoryIds.add(historyId);
       return 0;
     }
 
@@ -81,7 +98,7 @@ async function processNewMessages(startHistoryId) {
       const messages = [
         ...(history.messagesAdded || []),
         ...(history.labelsAdded || []).filter(label => 
-          label.labelIds.includes('INBOX')
+          label.labelIds?.includes('INBOX')
         )
       ];
 
@@ -105,7 +122,7 @@ async function processNewMessages(startHistoryId) {
           if (messageData.data.payload) {
             const parts = messageData.data.payload.parts || [messageData.data.payload];
             for (const part of parts) {
-              if (part.mimeType === 'text/plain' && part.body.data) {
+              if (part.mimeType === 'text/plain' && part.body?.data) {
                 body = Buffer.from(part.body.data, 'base64').toString('utf8');
                 break;
               }
@@ -115,9 +132,9 @@ async function processNewMessages(startHistoryId) {
           const emailContent = {
             id: messageData.data.id,
             threadId: messageData.data.threadId,
-            subject: messageData.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value,
-            from: messageData.data.payload.headers.find(h => h.name.toLowerCase() === 'from')?.value,
-            body: body
+            subject: messageData.data.payload.headers.find(h => h.name.toLowerCase() === 'subject')?.value || '(No subject)',
+            from: messageData.data.payload.headers.find(h => h.name.toLowerCase() === 'from')?.value || 'unknown',
+            body: body || '(No content)'
           };
 
           logger.info('Email content retrieved', {
@@ -185,6 +202,8 @@ async function processNewMessages(startHistoryId) {
       }
     }
 
+    // Mark this history ID as processed
+    processedHistoryIds.add(historyId);
     return processedCount;
   } catch (error) {
     logger.error('Error fetching message history:', {
