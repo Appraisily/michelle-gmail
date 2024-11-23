@@ -30,7 +30,7 @@ async function getGmailAuth() {
       
       lastHistoryId = profile.data.historyId;
       logger.info('Gmail credentials verified', { 
-        historyId: lastHistoryId,
+        initialHistoryId: lastHistoryId,
         email: profile.data.emailAddress 
       });
     } catch (error) {
@@ -60,20 +60,20 @@ async function processNewMessages(notificationHistoryId) {
       });
       lastHistoryId = profile.data.historyId;
       logger.info('Initialized lastHistoryId', { 
-        lastHistoryId,
-        notificationHistoryId 
+        lastHistoryId: lastHistoryId,
+        notificationHistoryId: notificationHistoryId 
       });
       return 0;
     }
 
     logger.info('Fetching history', { 
-      lastHistoryId,
-      notificationHistoryId,
+      lastHistoryId: lastHistoryId,
+      notificationHistoryId: notificationHistoryId,
       startingFrom: lastHistoryId
     });
 
     if (!lastHistoryId || isNaN(parseInt(lastHistoryId))) {
-      logger.error('Invalid lastHistoryId', { lastHistoryId });
+      logger.error('Invalid lastHistoryId', { lastHistoryId: lastHistoryId });
       return 0;
     }
 
@@ -87,30 +87,31 @@ async function processNewMessages(notificationHistoryId) {
       });
 
       logger.info('History response received', {
-        lastHistoryId,
-        notificationHistoryId,
+        currentHistoryId: lastHistoryId,
+        notificationHistoryId: notificationHistoryId,
         nextPageToken: historyResponse.data.nextPageToken,
         historyCount: historyResponse.data.history?.length || 0,
-        newHistoryId: historyResponse.data.historyId
+        newHistoryId: historyResponse.data.historyId,
+        historyIds: historyResponse.data.history?.map(h => h.id) || []
       });
 
     } catch (error) {
       if (error.response?.status === 404) {
         logger.error('History ID not found', { 
-          lastHistoryId,
-          notificationHistoryId,
+          lastHistoryId: lastHistoryId,
+          notificationHistoryId: notificationHistoryId,
           error: error.message 
         });
         const profile = await gmail.users.getProfile({ 
           auth,
           userId: 'me' 
         });
-        lastHistoryId = profile.data.historyId;
         logger.info('Updated history ID', { 
           oldHistoryId: lastHistoryId,
           newHistoryId: profile.data.historyId,
-          notificationHistoryId 
+          notificationHistoryId: notificationHistoryId 
         });
+        lastHistoryId = profile.data.historyId;
         return 0;
       }
       throw error;
@@ -118,8 +119,8 @@ async function processNewMessages(notificationHistoryId) {
 
     if (!historyResponse.data.history) {
       logger.info('No new messages', { 
-        lastHistoryId,
-        notificationHistoryId 
+        lastHistoryId: lastHistoryId,
+        notificationHistoryId: notificationHistoryId 
       });
       return 0;
     }
@@ -128,8 +129,8 @@ async function processNewMessages(notificationHistoryId) {
     for (const history of historyResponse.data.history) {
       logger.info('Processing history entry', {
         historyId: history.id,
-        lastHistoryId,
-        notificationHistoryId,
+        lastHistoryId: lastHistoryId,
+        notificationHistoryId: notificationHistoryId,
         messageCount: history.messagesAdded?.length || 0
       });
 
@@ -137,8 +138,8 @@ async function processNewMessages(notificationHistoryId) {
         try {
           logger.info('Processing message', {
             historyId: history.id,
-            lastHistoryId,
-            notificationHistoryId,
+            lastHistoryId: lastHistoryId,
+            notificationHistoryId: notificationHistoryId,
             messageId: message.message.id,
             threadId: message.message.threadId,
             labelIds: message.message.labelIds
@@ -153,8 +154,8 @@ async function processNewMessages(notificationHistoryId) {
 
           logger.info('Thread details', {
             historyId: history.id,
-            lastHistoryId,
-            notificationHistoryId,
+            lastHistoryId: lastHistoryId,
+            notificationHistoryId: notificationHistoryId,
             threadId: threadResponse.data.id,
             messageCount: threadResponse.data.messages?.length,
             snippet: threadResponse.data.snippet,
@@ -179,8 +180,8 @@ async function processNewMessages(notificationHistoryId) {
 
           logger.info('Email content', {
             historyId: history.id,
-            lastHistoryId,
-            notificationHistoryId,
+            lastHistoryId: lastHistoryId,
+            notificationHistoryId: notificationHistoryId,
             threadId: emailContent.threadId,
             messageId: emailContent.id,
             subject: emailContent.subject,
@@ -194,8 +195,8 @@ async function processNewMessages(notificationHistoryId) {
           if (requiresReply) {
             logger.info('Generating reply', { 
               historyId: history.id,
-              lastHistoryId,
-              notificationHistoryId,
+              lastHistoryId: lastHistoryId,
+              notificationHistoryId: notificationHistoryId,
               threadId: emailContent.threadId,
               messageId: emailContent.id,
               subject: emailContent.subject
@@ -224,8 +225,8 @@ async function processNewMessages(notificationHistoryId) {
 
             logger.info('Reply sent', { 
               historyId: history.id,
-              lastHistoryId,
-              notificationHistoryId,
+              lastHistoryId: lastHistoryId,
+              notificationHistoryId: notificationHistoryId,
               originalThreadId: emailContent.threadId,
               originalMessageId: emailContent.id,
               replyMessageId: sentResponse.data.id,
@@ -245,8 +246,8 @@ async function processNewMessages(notificationHistoryId) {
             messageId: emailContent.id,
             threadId: emailContent.threadId,
             historyId: history.id,
-            lastHistoryId,
-            notificationHistoryId
+            lastHistoryId: lastHistoryId,
+            notificationHistoryId: notificationHistoryId
           });
 
           processedCount++;
@@ -254,8 +255,8 @@ async function processNewMessages(notificationHistoryId) {
         } catch (error) {
           logger.error('Message processing error', {
             historyId: history.id,
-            lastHistoryId,
-            notificationHistoryId,
+            lastHistoryId: lastHistoryId,
+            notificationHistoryId: notificationHistoryId,
             threadId: message.message.threadId,
             messageId: message.message.id,
             error: error.message,
@@ -271,7 +272,7 @@ async function processNewMessages(notificationHistoryId) {
       const oldHistoryId = lastHistoryId;
       lastHistoryId = notificationHistoryId;
       logger.info('Updated lastHistoryId after processing', {
-        oldHistoryId,
+        oldHistoryId: oldHistoryId,
         newHistoryId: lastHistoryId,
         processedMessages: processedCount
       });
@@ -280,8 +281,8 @@ async function processNewMessages(notificationHistoryId) {
     return processedCount;
   } catch (error) {
     logger.error('History fetch error', {
-      lastHistoryId,
-      notificationHistoryId,
+      lastHistoryId: lastHistoryId,
+      notificationHistoryId: notificationHistoryId,
       error: error.message,
       stack: error.stack
     });
@@ -293,7 +294,7 @@ async function processNewMessages(notificationHistoryId) {
 export async function handleWebhook(data) {
   logger.info('Gmail webhook received', {
     notificationHistoryId: data.historyId,
-    lastHistoryId,
+    lastHistoryId: lastHistoryId,
     emailAddress: data.emailAddress
   });
   
@@ -304,16 +305,16 @@ export async function handleWebhook(data) {
     
     const processingTime = Date.now() - startTime;
     logger.info('Webhook processing completed', {
-      notificationHistoryId: data.historyId,
-      lastHistoryId,
       processed: processedCount > 0,
       messages: processedCount,
-      processingTime
+      processingTime,
+      notificationHistoryId: data.historyId,
+      lastHistoryId: lastHistoryId
     });
   } catch (error) {
     logger.error('Webhook handler error', {
       notificationHistoryId: data.historyId,
-      lastHistoryId,
+      lastHistoryId: lastHistoryId,
       error: error.message,
       stack: error.stack
     });
