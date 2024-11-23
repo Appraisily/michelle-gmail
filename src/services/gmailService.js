@@ -70,6 +70,18 @@ async function processNewMessages(startHistoryId) {
         startHistoryId: startHistoryId,
         historyTypes: ['messageAdded']
       });
+
+      // Log the raw history response for debugging
+      logger.info('Raw history response', {
+        history: historyResponse.data.history?.map(h => ({
+          id: h.id,
+          messages: h.messagesAdded?.map(m => ({
+            threadId: m.message.threadId,
+            messageId: m.message.id
+          }))
+        }))
+      });
+
     } catch (error) {
       if (error.response?.status === 404) {
         logger.error('History ID not found or too old', { 
@@ -95,9 +107,25 @@ async function processNewMessages(startHistoryId) {
     for (const history of historyResponse.data.history) {
       for (const message of history.messagesAdded || []) {
         try {
-          logger.info('Processing message', { 
+          // Log raw message data for debugging
+          logger.info('Raw message data', {
+            threadId: message.message.threadId,
             messageId: message.message.id,
-            threadId: message.message.threadId
+            labelIds: message.message.labelIds
+          });
+
+          // Get full thread details
+          const threadResponse = await gmail.users.threads.get({
+            auth,
+            userId: 'me',
+            id: message.message.threadId
+          });
+
+          logger.info('Thread details', {
+            threadId: threadResponse.data.id,
+            messageCount: threadResponse.data.messages?.length,
+            snippet: threadResponse.data.snippet,
+            historyId: threadResponse.data.historyId
           });
 
           const messageData = await gmail.users.messages.get({
@@ -116,16 +144,20 @@ async function processNewMessages(startHistoryId) {
             body: messageData.data.snippet || ''
           };
 
-          logger.info('Retrieved email content', {
+          logger.info('Email content', {
+            threadId: emailContent.threadId,
+            messageId: emailContent.id,
             subject: emailContent.subject,
             from: emailContent.from,
-            bodyLength: emailContent.body.length
+            labelIds: messageData.data.labelIds,
+            internalDate: messageData.data.internalDate
           });
 
           const { requiresReply, generatedReply } = await classifyAndProcessEmail(emailContent.body);
           
           if (requiresReply) {
-            logger.info('Generating reply for email', { 
+            logger.info('Generating reply', { 
+              threadId: emailContent.threadId,
               messageId: emailContent.id,
               subject: emailContent.subject
             });
@@ -145,13 +177,19 @@ async function processNewMessages(startHistoryId) {
               threadId: emailContent.threadId
             };
 
-            await gmail.users.messages.send({
+            const sentResponse = await gmail.users.messages.send({
               auth,
               userId: 'me',
               resource: replyMessage
             });
 
-            logger.info('Reply sent successfully', { messageId: emailContent.id });
+            logger.info('Reply sent', { 
+              originalThreadId: emailContent.threadId,
+              originalMessageId: emailContent.id,
+              replyMessageId: sentResponse.data.id,
+              replyThreadId: sentResponse.data.threadId
+            });
+            
             recordMetric('replies_sent', 1);
           }
 
@@ -161,13 +199,16 @@ async function processNewMessages(startHistoryId) {
             subject: emailContent.subject,
             content: emailContent.body,
             requiresReply,
-            reply: generatedReply || 'No reply needed'
+            reply: generatedReply || 'No reply needed',
+            messageId: emailContent.id,
+            threadId: emailContent.threadId
           });
 
           processedCount++;
           recordMetric('emails_processed', 1);
         } catch (error) {
-          logger.error('Error processing message:', {
+          logger.error('Message processing error:', {
+            threadId: message.message.threadId,
             messageId: message.message.id,
             error: error.message,
             stack: error.stack
@@ -179,7 +220,7 @@ async function processNewMessages(startHistoryId) {
 
     return processedCount;
   } catch (error) {
-    logger.error('Error fetching message history:', {
+    logger.error('History fetch error:', {
       error: error.message,
       stack: error.stack
     });
@@ -189,7 +230,7 @@ async function processNewMessages(startHistoryId) {
 }
 
 export async function handleWebhook(data) {
-  logger.info('Processing Gmail webhook:', {
+  logger.info('Gmail webhook received:', {
     historyId: data.historyId,
     emailAddress: data.emailAddress
   });
@@ -203,12 +244,14 @@ export async function handleWebhook(data) {
     logger.info('Webhook processing completed', {
       processed: processedCount > 0,
       messages: processedCount,
-      processingTime
+      processingTime,
+      historyId: data.historyId
     });
   } catch (error) {
-    logger.error('Error in webhook handler:', {
+    logger.error('Webhook handler error:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      historyId: data.historyId
     });
     throw error;
   }
@@ -242,7 +285,7 @@ export async function initializeGmailWatch() {
     recordMetric('gmail_watch_renewals', 1);
     return response.data;
   } catch (error) {
-    logger.error('Error in Gmail watch initialization:', {
+    logger.error('Gmail watch initialization error:', {
       error: error.message,
       code: error.code,
       details: error.response?.data || 'No additional details'
@@ -265,7 +308,7 @@ async function stopExistingWatch() {
     if (error.code === 404) {
       logger.info('No existing Gmail watch to stop');
     } else {
-      logger.warn('Error stopping existing Gmail watch:', {
+      logger.warn('Gmail watch stop error:', {
         error: error.message,
         code: error.code
       });
