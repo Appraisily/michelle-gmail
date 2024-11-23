@@ -34,17 +34,29 @@ export async function setupGmailWatch() {
 
     const auth = await initializeGmailAuth();
     
-    // Stop any existing watch first
+    // First get current profile to check existing watch
+    const profile = await gmail.users.getProfile({
+      auth,
+      userId: 'me'
+    });
+
+    logger.info('Current Gmail profile:', {
+      email: profile.data.emailAddress,
+      historyId: profile.data.historyId,
+      messagesTotal: profile.data.messagesTotal
+    });
+
+    // Stop any existing watch
     await stopExistingWatch();
 
-    // Set up the watch request
+    // Set up the new watch request
     const watchRequest = {
       auth,
       userId: 'me',
       requestBody: {
         topicName,
-        labelIds: ['INBOX', 'UNREAD'],
-        labelFilterBehavior: 'INCLUDE',
+        labelIds: ['INBOX'],
+        labelFilterBehavior: 'INCLUDE'
       }
     };
 
@@ -68,16 +80,29 @@ export async function setupGmailWatch() {
     });
 
     // Verify the watch was set up correctly
-    const profile = await gmail.users.getProfile({
+    const verifyProfile = await gmail.users.getProfile({
       auth,
       userId: 'me'
     });
 
     logger.info('Gmail profile after watch setup', {
-      email: profile.data.emailAddress,
-      historyId: profile.data.historyId,
-      messagesTotal: profile.data.messagesTotal,
-      threadsTotal: profile.data.threadsTotal
+      email: verifyProfile.data.emailAddress,
+      historyId: verifyProfile.data.historyId,
+      messagesTotal: verifyProfile.data.messagesTotal,
+      threadsTotal: verifyProfile.data.threadsTotal
+    });
+
+    // Test the watch by listing history
+    const history = await gmail.users.history.list({
+      auth,
+      userId: 'me',
+      startHistoryId: watchResponse.data.historyId
+    });
+
+    logger.info('Initial history check:', {
+      hasHistory: !!history.data.history,
+      historyId: watchResponse.data.historyId,
+      nextPageToken: history.data.nextPageToken
     });
 
     recordMetric('gmail_watch_renewals', 1);
