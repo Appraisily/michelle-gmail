@@ -76,10 +76,11 @@ export async function initializeGmailWatch() {
 
 export async function handleWebhook(data) {
   try {
-    logger.info('📨 Gmail Webhook Data', {
+    logger.info('📨 Gmail Webhook Data Received', {
       historyId: data.historyId,
       emailAddress: data.emailAddress,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      data: JSON.stringify(data)
     });
 
     const processedCount = await processNewMessages(data.historyId);
@@ -134,12 +135,11 @@ async function processNewMessages(notificationHistoryId) {
         notificationHistoryId
       });
 
-      // Fixed history types to match Gmail API requirements
       historyResponse = await gmail.users.history.list({
         auth,
         userId: 'me',
         startHistoryId: lastHistoryId,
-        historyTypes: ['messageAdded'], // Removed invalid 'labelsAdded'
+        historyTypes: ['messageAdded'],
         maxResults: 100
       });
 
@@ -147,8 +147,7 @@ async function processNewMessages(notificationHistoryId) {
         hasHistory: !!historyResponse.data.history,
         historyCount: historyResponse.data.history?.length || 0,
         nextPageToken: !!historyResponse.data.nextPageToken,
-        startHistoryId: lastHistoryId,
-        notificationHistoryId
+        historyData: JSON.stringify(historyResponse.data)
       });
 
     } catch (error) {
@@ -187,7 +186,8 @@ async function processNewMessages(notificationHistoryId) {
         historyId: history.id,
         lastHistoryId,
         notificationHistoryId,
-        messageCount: history.messagesAdded?.length || 0
+        messageCount: history.messagesAdded?.length || 0,
+        historyData: JSON.stringify(history)
       });
 
       if (!history.messagesAdded) {
@@ -203,7 +203,7 @@ async function processNewMessages(notificationHistoryId) {
           if (!messageAdded.message) {
             logger.warn('Empty message in messagesAdded', {
               historyId: history.id,
-              rawMessageAdded: JSON.stringify(messageAdded)
+              messageAddedData: JSON.stringify(messageAdded)
             });
             continue;
           }
@@ -212,7 +212,8 @@ async function processNewMessages(notificationHistoryId) {
             messageId: messageAdded.message.id,
             threadId: messageAdded.message.threadId,
             historyId: history.id,
-            labelIds: messageAdded.message.labelIds
+            labelIds: messageAdded.message.labelIds,
+            messageData: JSON.stringify(messageAdded.message)
           });
 
           const messageData = await gmail.users.messages.get({
@@ -228,7 +229,7 @@ async function processNewMessages(notificationHistoryId) {
             historyId: history.id,
             snippet: messageData.data.snippet,
             hasPayload: !!messageData.data.payload,
-            labelIds: messageData.data.labelIds
+            messageDetails: JSON.stringify(messageData.data)
           });
 
           const headers = messageData.data.payload?.headers || [];
@@ -245,7 +246,7 @@ async function processNewMessages(notificationHistoryId) {
             threadId: emailContent.threadId,
             subject: emailContent.subject,
             from: emailContent.from,
-            historyId: history.id,
+            body: emailContent.body,
             bodyLength: emailContent.body.length
           });
 
