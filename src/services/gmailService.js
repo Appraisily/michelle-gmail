@@ -22,12 +22,10 @@ async function getGmailAuth() {
       refresh_token: secrets.GMAIL_REFRESH_TOKEN
     });
 
-    // Verify the credentials work and permissions are correct
     try {
       const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
       const profile = await gmail.users.getProfile({ userId: 'me' });
       
-      // Test Gmail API permissions
       await gmail.users.labels.list({ userId: 'me' });
       
       lastHistoryId = profile.data.historyId;
@@ -59,13 +57,11 @@ async function processNewMessages(startHistoryId) {
       lastKnownHistoryId: lastHistoryId 
     });
 
-    // Verify historyId is valid
     if (!startHistoryId || isNaN(parseInt(startHistoryId))) {
       logger.error('Invalid historyId received', { startHistoryId });
       return 0;
     }
 
-    // Test history list access first
     let historyResponse;
     try {
       historyResponse = await gmail.users.history.list({
@@ -80,7 +76,6 @@ async function processNewMessages(startHistoryId) {
           startHistoryId,
           error: error.message 
         });
-        // Get the latest history ID
         const profile = await gmail.users.getProfile({ 
           auth,
           userId: 'me' 
@@ -219,50 +214,16 @@ export async function handleWebhook(data) {
   }
 }
 
-export async function renewGmailWatch() {
+export async function initializeGmailWatch() {
   try {
-    logger.info('Starting Gmail watch renewal process...');
+    logger.info('Starting Gmail watch initialization...');
     const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
     logger.info(`Using Pub/Sub topic: ${topicName}`);
 
-    // Step 1: Verify Pub/Sub permissions
-    const pubsubVerified = await verifyPubSubTopic();
-    if (!pubsubVerified) {
-      throw new Error('Failed to verify Pub/Sub topic permissions');
-    }
-
-    // Step 2: Stop existing watch
     await stopExistingWatch();
 
-    // Step 3: Set up new watch
-    const watchData = await setupNewWatch();
-    
-    // Step 4: Verify watch setup
-    const watchVerified = await verifyWatchSetup();
-    if (!watchVerified) {
-      throw new Error('Failed to verify watch setup');
-    }
-
-    recordMetric('gmail_watch_renewals', 1);
-    return watchData;
-  } catch (error) {
-    logger.error('Error in Gmail watch renewal:', {
-      error: error.message,
-      code: error.code,
-      details: error.response?.data || 'No additional details'
-    });
-    recordMetric('gmail_watch_renewal_failures', 1);
-    throw error;
-  }
-}
-
-async function verifyPubSubTopic() {
-  const auth = await getGmailAuth();
-  const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
-  
-  try {
-    await gmail.users.watch({
-      auth,
+    const response = await gmail.users.watch({
+      auth: await getGmailAuth(),
       userId: 'me',
       requestBody: {
         topicName,
@@ -270,15 +231,24 @@ async function verifyPubSubTopic() {
         labelFilterAction: 'include'
       }
     });
-    logger.info('Pub/Sub topic verification successful');
-    return true;
+
+    const expirationDate = new Date(parseInt(response.data.expiration));
+    logger.info('Gmail watch setup successful', {
+      historyId: response.data.historyId,
+      expiration: expirationDate.toISOString(),
+      topicName
+    });
+
+    recordMetric('gmail_watch_renewals', 1);
+    return response.data;
   } catch (error) {
-    logger.error('Pub/Sub topic verification failed:', {
+    logger.error('Error in Gmail watch initialization:', {
       error: error.message,
       code: error.code,
       details: error.response?.data || 'No additional details'
     });
-    return false;
+    recordMetric('gmail_watch_renewal_failures', 1);
+    throw error;
   }
 }
 
@@ -300,53 +270,5 @@ async function stopExistingWatch() {
         code: error.code
       });
     }
-  }
-}
-
-async function setupNewWatch() {
-  const auth = await getGmailAuth();
-  const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
-
-  const response = await gmail.users.watch({
-    auth,
-    userId: 'me',
-    requestBody: {
-      topicName,
-      labelIds: ['INBOX'],
-      labelFilterAction: 'include'
-    }
-  });
-
-  const expirationDate = new Date(parseInt(response.data.expiration));
-  logger.info('Gmail watch setup successful', {
-    historyId: response.data.historyId,
-    expiration: expirationDate.toISOString(),
-    topicName
-  });
-
-  return response.data;
-}
-
-async function verifyWatchSetup() {
-  try {
-    const auth = await getGmailAuth();
-    const response = await gmail.users.getProfile({
-      auth,
-      userId: 'me'
-    });
-    
-    if (response.data.historyId) {
-      logger.info('Watch setup verified successfully', {
-        historyId: response.data.historyId
-      });
-      return true;
-    }
-    return false;
-  } catch (error) {
-    logger.error('Watch setup verification failed:', {
-      error: error.message,
-      code: error.code
-    });
-    return false;
   }
 }

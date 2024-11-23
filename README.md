@@ -2,6 +2,26 @@
 
 This service automatically processes incoming emails using Gmail API watch notifications, OpenAI for classification and response generation, and logs activities to Google Sheets.
 
+## Service Requirements
+
+1. **Gmail Watch Management**
+   - Initial watch setup required during service startup
+   - Watch expires after 7 days
+   - Automatic renewal via cron job every 6 days
+   - Only one active watch allowed per Gmail account
+
+2. **Authentication Requirements**
+   - Gmail OAuth2 credentials
+   - Service account with appropriate permissions
+   - OpenAI API key for email processing
+   - Google Sheets access for logging
+
+3. **Runtime Requirements**
+   - Node.js v20 or higher
+   - Memory: 512Mi minimum
+   - CPU: 1 core minimum
+   - Persistent internet connection
+
 ## Email Processing Flow
 
 1. **Gmail Watch Setup**

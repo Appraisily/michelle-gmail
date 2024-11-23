@@ -1,6 +1,6 @@
 import express from 'express';
 import cron from 'node-cron';
-import { handleWebhook, renewGmailWatch } from './services/gmailService.js';
+import { handleWebhook, initializeGmailWatch } from './services/gmailService.js';
 import { logger } from './utils/logger.js';
 import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
@@ -21,13 +21,6 @@ async function initializeServices() {
       throw new Error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
     }
 
-    logger.info('Environment variables validated', {
-      projectId: process.env.PROJECT_ID,
-      pubsubTopic: process.env.PUBSUB_TOPIC,
-      pubsubSubscription: process.env.PUBSUB_SUBSCRIPTION,
-      gmailUser: process.env.GMAIL_USER_EMAIL
-    });
-    
     await getSecrets();
     logger.info('Secrets loaded successfully');
     
@@ -35,7 +28,7 @@ async function initializeServices() {
     logger.info('Metrics setup completed');
 
     try {
-      await renewGmailWatch();
+      await initializeGmailWatch();
       logger.info('Initial Gmail watch setup completed');
     } catch (error) {
       logger.error('Failed initial Gmail watch setup:', error);
@@ -48,23 +41,23 @@ async function initializeServices() {
   }
 }
 
-// Schedule Gmail watch renewal (every 6 days)
 cron.schedule('0 0 */6 * *', async () => {
   try {
     logger.info('Running scheduled Gmail watch renewal...');
-    await renewGmailWatch();
+    await initializeGmailWatch();
     logger.info('Scheduled Gmail watch renewal completed successfully');
   } catch (error) {
     logger.error('Failed to renew Gmail watch:', error);
   }
 });
 
-// Webhook endpoint for Gmail notifications via Pub/Sub
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
     logger.info('Received webhook request', {
       bodySize: JSON.stringify(req.body).length,
-      hasMessage: !!req.body?.message
+      hasMessage: !!req.body?.message,
+      messageData: req.body?.message?.data ? 'present' : 'missing',
+      messageAttributes: JSON.stringify(req.body?.message?.attributes || {})
     });
 
     const message = req.body.message;
@@ -78,19 +71,27 @@ app.post('/api/gmail/webhook', async (req, res) => {
       return res.status(400).send('No data in message');
     }
 
-    // Decode base64 data
     const decodedData = Buffer.from(message.data, 'base64').toString();
-    logger.info('Decoded Pub/Sub data', { decodedData });
+    logger.info('Decoded Pub/Sub data', { 
+      decodedData,
+      dataLength: decodedData.length 
+    });
 
     let parsedData;
     try {
       parsedData = JSON.parse(decodedData);
       logger.info('Parsed notification data', { 
-        emailHistoryId: parsedData.historyId,
-        hasHistoryId: !!parsedData.historyId
+        historyId: parsedData.historyId,
+        emailAddress: parsedData.emailAddress,
+        hasHistoryId: !!parsedData.historyId,
+        rawData: JSON.stringify(parsedData),
+        subscriptionName: message.attributes?.subscription || 'not_provided'
       });
     } catch (error) {
-      logger.error('Failed to parse message data', { error, decodedData });
+      logger.error('Failed to parse message data', { 
+        error: error.message, 
+        decodedData 
+      });
       return res.status(400).send('Invalid message format');
     }
 
@@ -99,8 +100,8 @@ app.post('/api/gmail/webhook', async (req, res) => {
       return res.status(400).send('No historyId in notification');
     }
 
-    // Process the notification
     await handleWebhook(parsedData);
+    
     res.status(200).send('Notification processed successfully');
   } catch (error) {
     logger.error('Error processing webhook:', {
