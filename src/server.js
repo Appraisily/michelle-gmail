@@ -81,14 +81,28 @@ app.post('/api/gmail/webhook', async (req, res) => {
   try {
     logger.info('Received webhook request', {
       headers: req.headers,
-      body: req.body
+      bodySize: JSON.stringify(req.body).length,
+      hasMessage: !!req.body?.message,
+      messageId: req.body?.message?.messageId
     });
 
     const message = req.body.message;
     if (!message) {
-      logger.warn('No message received in webhook', { body: req.body });
+      logger.warn('No message received in webhook', { 
+        body: JSON.stringify(req.body),
+        contentType: req.headers['content-type']
+      });
       return res.status(400).send('No message received');
     }
+
+    // Log full message structure for debugging
+    logger.info('Pub/Sub message structure', {
+      messageId: message.messageId,
+      publishTime: message.publishTime,
+      attributes: message.attributes,
+      hasData: !!message.data,
+      dataSize: message.data ? message.data.length : 0
+    });
 
     // Check for duplicate messages
     if (processedMessages.has(message.messageId)) {
@@ -96,25 +110,30 @@ app.post('/api/gmail/webhook', async (req, res) => {
       return res.status(200).send('Message already processed');
     }
 
-    logger.info('Processing Pub/Sub message', {
-      messageId: message.messageId,
-      publishTime: message.publishTime,
-      attributes: message.attributes
-    });
-
     if (!message.data) {
-      logger.warn('No data field in message', { message });
+      logger.warn('No data field in message', { 
+        message: JSON.stringify(message),
+        messageKeys: Object.keys(message)
+      });
       return res.status(400).send('No data field in message');
     }
 
     // Decode and parse the message data
     const decodedData = Buffer.from(message.data, 'base64').toString();
-    logger.info('Decoded message data', { decodedData });
+    logger.info('Decoded message data', { 
+      decodedData,
+      decodedLength: decodedData.length,
+      isJSON: isValidJSON(decodedData)
+    });
 
     let parsedData;
     try {
       parsedData = JSON.parse(decodedData);
-      logger.info('Parsed message data', { parsedData });
+      logger.info('Parsed message data', { 
+        parsedData,
+        hasHistoryId: !!parsedData?.historyId,
+        historyId: parsedData?.historyId
+      });
     } catch (parseError) {
       logger.error('Failed to parse message data', { 
         error: parseError.message,
@@ -134,12 +153,22 @@ app.post('/api/gmail/webhook', async (req, res) => {
     logger.error('Error processing webhook:', {
       error: error.message,
       stack: error.stack,
-      body: req.body
+      body: JSON.stringify(req.body)
     });
     // Return 500 to trigger Pub/Sub retry
     res.status(500).send('Error processing notification');
   }
 });
+
+// Helper function to check if a string is valid JSON
+function isValidJSON(str) {
+  try {
+    JSON.parse(str);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
