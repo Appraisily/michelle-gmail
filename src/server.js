@@ -6,7 +6,8 @@ import { setupMetrics } from './utils/monitoring.js';
 import { getSecrets } from './utils/secretManager.js';
 
 const app = express();
-app.use(express.json());
+// Increase JSON payload limit for larger messages
+app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
 
@@ -46,7 +47,6 @@ async function initializeServices() {
       logger.info('Initial Gmail watch setup completed');
     } catch (error) {
       logger.error('Failed initial Gmail watch setup:', error);
-      // Don't throw here, as we can retry later with cron
     }
 
     logger.info('Services initialized successfully');
@@ -70,39 +70,46 @@ cron.schedule('0 0 */6 * *', async () => {
 // Webhook endpoint for Gmail notifications via Pub/Sub
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
+    logger.info('Received webhook request', {
+      headers: req.headers,
+      body: req.body
+    });
+
     const message = req.body.message;
     if (!message) {
-      logger.warn('No message data received');
-      return res.status(400).send('No message data received');
+      logger.warn('No message received in webhook', { body: req.body });
+      return res.status(400).send('No message received');
     }
 
-    logger.info('Received webhook notification', {
+    logger.info('Processing Pub/Sub message', {
       messageId: message.messageId,
       publishTime: message.publishTime,
-      data: message.data ? 'present' : 'missing'
+      attributes: message.attributes
     });
 
     if (!message.data) {
-      logger.warn('No message data present');
-      return res.status(400).send('No message data present');
+      logger.warn('No data field in message', { message });
+      return res.status(400).send('No data field in message');
     }
 
-    // Decode and log the message data
+    // Decode and parse the message data
     const decodedData = Buffer.from(message.data, 'base64').toString();
-    logger.info('Decoded webhook data:', {
-      rawData: decodedData,
-      parsedData: JSON.parse(decodedData)
-    });
+    logger.info('Decoded message data', { decodedData });
 
-    const data = JSON.parse(decodedData);
-    logger.info('Processing Gmail notification:', {
-      emailHistoryId: data.historyId,
-      emailThreadId: data.threadId,
-      emailId: data.emailId,
-      labelIds: data.labelIds
-    });
+    let parsedData;
+    try {
+      parsedData = JSON.parse(decodedData);
+      logger.info('Parsed message data', { parsedData });
+    } catch (parseError) {
+      logger.error('Failed to parse message data', { 
+        error: parseError.message,
+        decodedData 
+      });
+      return res.status(400).send('Invalid message data format');
+    }
 
-    await handleWebhook(data);
+    // Process the webhook data
+    await handleWebhook(parsedData);
     
     res.status(200).send('Notification processed successfully');
   } catch (error) {

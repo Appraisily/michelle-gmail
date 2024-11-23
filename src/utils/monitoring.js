@@ -6,6 +6,7 @@ const client = new MonitoringServiceClient();
 
 // Metric values cache
 const metricValues = new Map();
+const metricStartTimes = new Map();
 
 const metrics = {
   'emails_processed': createMetric('emails_processed'),
@@ -41,7 +42,7 @@ export async function setupMetrics() {
         name: metric.type,
         displayName: metricName,
         type: 'custom.googleapis.com/gmail_processor/' + metricName,
-        metricKind: 'CUMULATIVE',  // Changed from GAUGE to CUMULATIVE
+        metricKind: 'GAUGE',
         valueType: 'INT64',
         unit: '1',
         description: `Tracks ${metricName.replace(/_/g, ' ')}`,
@@ -57,8 +58,10 @@ export async function setupMetrics() {
         metricDescriptor: descriptor
       });
 
-      // Initialize metric value
+      // Initialize metric value and start time
       metricValues.set(metricName, 0);
+      metricStartTimes.set(metricName, new Date());
+
     } catch (error) {
       // Ignore errors if metric descriptor already exists
       if (!error.message.includes('ALREADY_EXISTS')) {
@@ -68,35 +71,29 @@ export async function setupMetrics() {
   }
 }
 
-export async function recordMetric(metricName, increment = 1) {
+export async function recordMetric(metricName, value = 1) {
   if (!metrics[metricName]) {
     logger.warn(`Unknown metric: ${metricName}`);
     return;
   }
 
   try {
-    // Update cumulative value
-    const currentValue = metricValues.get(metricName) || 0;
-    const newValue = currentValue + increment;
-    metricValues.set(metricName, newValue);
+    // Update value
+    metricValues.set(metricName, value);
 
     const projectPath = client.projectPath(process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT_ID);
-    const startTime = new Date();
-    startTime.setHours(0, 0, 0, 0); // Start of the day
+    const now = new Date();
 
     const timeSeriesData = {
       metric: metrics[metricName],
       points: [{
         interval: {
-          startTime: {
-            seconds: Math.floor(startTime.getTime() / 1000)
-          },
           endTime: {
-            seconds: Math.floor(Date.now() / 1000)
+            seconds: Math.floor(now.getTime() / 1000)
           }
         },
         value: {
-          int64Value: newValue
+          int64Value: value
         }
       }]
     };
@@ -106,7 +103,7 @@ export async function recordMetric(metricName, increment = 1) {
       timeSeries: [timeSeriesData]
     });
 
-    logger.debug(`Metric ${metricName} recorded successfully`, { value: newValue });
+    logger.debug(`Metric ${metricName} recorded successfully`, { value });
   } catch (error) {
     logger.error(`Error recording metric ${metricName}:`, error);
     // Don't throw the error to prevent breaking the main flow
