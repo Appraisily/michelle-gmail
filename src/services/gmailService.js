@@ -29,12 +29,12 @@ async function getGmailAuth() {
       await gmail.users.labels.list({ userId: 'me' });
       
       lastHistoryId = profile.data.historyId;
-      logger.info('Gmail credentials verified', { 
+      logger.info('Gmail auth initialized', { 
         initialHistoryId: lastHistoryId,
         email: profile.data.emailAddress 
       });
     } catch (error) {
-      logger.error('Gmail authentication failed', {
+      logger.error('Gmail auth failed', {
         error: error.message,
         response: error.response?.data,
         code: error.code,
@@ -52,28 +52,24 @@ async function processNewMessages(notificationHistoryId) {
   const auth = await getGmailAuth();
   
   try {
-    // If we don't have a lastHistoryId, initialize it from the current state
+    // Log the history IDs we're working with
+    logger.info('Processing messages', { 
+      lastHistoryId,
+      notificationHistoryId,
+      hasLastHistoryId: !!lastHistoryId
+    });
+
+    // Initialize lastHistoryId if not set
     if (!lastHistoryId) {
       const profile = await gmail.users.getProfile({ 
         auth,
         userId: 'me' 
       });
       lastHistoryId = profile.data.historyId;
-      logger.info('Initialized lastHistoryId', { 
-        lastHistoryId: lastHistoryId,
-        notificationHistoryId: notificationHistoryId 
+      logger.info('Initialized history ID', { 
+        lastHistoryId,
+        notificationHistoryId
       });
-      return 0;
-    }
-
-    logger.info('Fetching history', { 
-      lastHistoryId: lastHistoryId,
-      notificationHistoryId: notificationHistoryId,
-      startingFrom: lastHistoryId
-    });
-
-    if (!lastHistoryId || isNaN(parseInt(lastHistoryId))) {
-      logger.error('Invalid lastHistoryId', { lastHistoryId: lastHistoryId });
       return 0;
     }
 
@@ -86,80 +82,60 @@ async function processNewMessages(notificationHistoryId) {
         historyTypes: ['messageAdded']
       });
 
-      logger.info('History response received', {
-        currentHistoryId: lastHistoryId,
-        notificationHistoryId: notificationHistoryId,
-        nextPageToken: historyResponse.data.nextPageToken,
+      logger.info('History response', {
+        lastHistoryId,
+        notificationHistoryId,
+        hasHistory: !!historyResponse.data.history,
         historyCount: historyResponse.data.history?.length || 0,
-        newHistoryId: historyResponse.data.historyId,
-        historyIds: historyResponse.data.history?.map(h => h.id) || []
+        nextPageToken: historyResponse.data.nextPageToken
       });
 
     } catch (error) {
       if (error.response?.status === 404) {
         logger.error('History ID not found', { 
-          lastHistoryId: lastHistoryId,
-          notificationHistoryId: notificationHistoryId,
+          lastHistoryId,
+          notificationHistoryId,
           error: error.message 
         });
         const profile = await gmail.users.getProfile({ 
           auth,
           userId: 'me' 
         });
-        logger.info('Updated history ID', { 
+        lastHistoryId = profile.data.historyId;
+        logger.info('Reset history ID', {
           oldHistoryId: lastHistoryId,
           newHistoryId: profile.data.historyId,
-          notificationHistoryId: notificationHistoryId 
+          notificationHistoryId
         });
-        lastHistoryId = profile.data.historyId;
         return 0;
       }
       throw error;
     }
 
     if (!historyResponse.data.history) {
-      logger.info('No new messages', { 
-        lastHistoryId: lastHistoryId,
-        notificationHistoryId: notificationHistoryId 
+      logger.info('No history entries', {
+        lastHistoryId,
+        notificationHistoryId
       });
       return 0;
     }
 
     let processedCount = 0;
     for (const history of historyResponse.data.history) {
-      logger.info('Processing history entry', {
+      logger.info('Processing history', {
         historyId: history.id,
-        lastHistoryId: lastHistoryId,
-        notificationHistoryId: notificationHistoryId,
+        lastHistoryId,
+        notificationHistoryId,
         messageCount: history.messagesAdded?.length || 0
       });
 
       for (const message of history.messagesAdded || []) {
         try {
           logger.info('Processing message', {
-            historyId: history.id,
-            lastHistoryId: lastHistoryId,
-            notificationHistoryId: notificationHistoryId,
             messageId: message.message.id,
             threadId: message.message.threadId,
-            labelIds: message.message.labelIds
-          });
-
-          // Get full thread details
-          const threadResponse = await gmail.users.threads.get({
-            auth,
-            userId: 'me',
-            id: message.message.threadId
-          });
-
-          logger.info('Thread details', {
             historyId: history.id,
-            lastHistoryId: lastHistoryId,
-            notificationHistoryId: notificationHistoryId,
-            threadId: threadResponse.data.id,
-            messageCount: threadResponse.data.messages?.length,
-            snippet: threadResponse.data.snippet,
-            threadHistoryId: threadResponse.data.historyId
+            labelIds: message.message.labelIds
           });
 
           const messageData = await gmail.users.messages.get({
@@ -178,28 +154,22 @@ async function processNewMessages(notificationHistoryId) {
             body: messageData.data.snippet || ''
           };
 
-          logger.info('Email content', {
-            historyId: history.id,
-            lastHistoryId: lastHistoryId,
-            notificationHistoryId: notificationHistoryId,
-            threadId: emailContent.threadId,
+          logger.info('Message details', {
             messageId: emailContent.id,
+            threadId: emailContent.threadId,
             subject: emailContent.subject,
             from: emailContent.from,
-            labelIds: messageData.data.labelIds,
-            internalDate: messageData.data.internalDate
+            historyId: history.id,
+            labelIds: messageData.data.labelIds
           });
 
           const { requiresReply, generatedReply } = await classifyAndProcessEmail(emailContent.body);
           
           if (requiresReply) {
-            logger.info('Generating reply', { 
-              historyId: history.id,
-              lastHistoryId: lastHistoryId,
-              notificationHistoryId: notificationHistoryId,
-              threadId: emailContent.threadId,
+            logger.info('Generating reply', {
               messageId: emailContent.id,
-              subject: emailContent.subject
+              threadId: emailContent.threadId,
+              historyId: history.id
             });
 
             const replyMessage = {
@@ -223,16 +193,13 @@ async function processNewMessages(notificationHistoryId) {
               resource: replyMessage
             });
 
-            logger.info('Reply sent', { 
-              historyId: history.id,
-              lastHistoryId: lastHistoryId,
-              notificationHistoryId: notificationHistoryId,
-              originalThreadId: emailContent.threadId,
+            logger.info('Reply sent', {
               originalMessageId: emailContent.id,
               replyMessageId: sentResponse.data.id,
-              replyThreadId: sentResponse.data.threadId
+              threadId: emailContent.threadId,
+              historyId: history.id
             });
-            
+
             recordMetric('replies_sent', 1);
           }
 
@@ -245,20 +212,16 @@ async function processNewMessages(notificationHistoryId) {
             reply: generatedReply || 'No reply needed',
             messageId: emailContent.id,
             threadId: emailContent.threadId,
-            historyId: history.id,
-            lastHistoryId: lastHistoryId,
-            notificationHistoryId: notificationHistoryId
+            historyId: history.id
           });
 
           processedCount++;
           recordMetric('emails_processed', 1);
         } catch (error) {
-          logger.error('Message processing error', {
-            historyId: history.id,
-            lastHistoryId: lastHistoryId,
-            notificationHistoryId: notificationHistoryId,
-            threadId: message.message.threadId,
+          logger.error('Message processing failed', {
             messageId: message.message.id,
+            threadId: message.message.threadId,
+            historyId: history.id,
             error: error.message,
             stack: error.stack
           });
@@ -267,22 +230,22 @@ async function processNewMessages(notificationHistoryId) {
       }
     }
 
-    // Update lastHistoryId to the notification's historyId after successful processing
+    // Update lastHistoryId after successful processing
     if (processedCount > 0) {
       const oldHistoryId = lastHistoryId;
       lastHistoryId = notificationHistoryId;
-      logger.info('Updated lastHistoryId after processing', {
-        oldHistoryId: oldHistoryId,
+      logger.info('Updated history ID', {
+        oldHistoryId,
         newHistoryId: lastHistoryId,
-        processedMessages: processedCount
+        processedCount
       });
     }
 
     return processedCount;
   } catch (error) {
-    logger.error('History fetch error', {
-      lastHistoryId: lastHistoryId,
-      notificationHistoryId: notificationHistoryId,
+    logger.error('History processing failed', {
+      lastHistoryId,
+      notificationHistoryId,
       error: error.message,
       stack: error.stack
     });
@@ -292,9 +255,9 @@ async function processNewMessages(notificationHistoryId) {
 }
 
 export async function handleWebhook(data) {
-  logger.info('Gmail webhook received', {
+  logger.info('Webhook received', {
     notificationHistoryId: data.historyId,
-    lastHistoryId: lastHistoryId,
+    lastHistoryId,
     emailAddress: data.emailAddress
   });
   
@@ -304,17 +267,16 @@ export async function handleWebhook(data) {
     const processedCount = await processNewMessages(data.historyId);
     
     const processingTime = Date.now() - startTime;
-    logger.info('Webhook processing completed', {
-      processed: processedCount > 0,
-      messages: processedCount,
+    logger.info('Webhook completed', {
+      processedCount,
       processingTime,
       notificationHistoryId: data.historyId,
-      lastHistoryId: lastHistoryId
+      lastHistoryId
     });
   } catch (error) {
-    logger.error('Webhook handler error', {
+    logger.error('Webhook failed', {
       notificationHistoryId: data.historyId,
-      lastHistoryId: lastHistoryId,
+      lastHistoryId,
       error: error.message,
       stack: error.stack
     });
@@ -324,9 +286,9 @@ export async function handleWebhook(data) {
 
 export async function initializeGmailWatch() {
   try {
-    logger.info('Starting Gmail watch initialization');
+    logger.info('Initializing Gmail watch');
     const topicName = `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`;
-    logger.info('Using Pub/Sub topic', { topicName });
+    logger.info('Using topic', { topicName });
 
     await stopExistingWatch();
 
@@ -341,7 +303,7 @@ export async function initializeGmailWatch() {
     });
 
     const expirationDate = new Date(parseInt(response.data.expiration));
-    logger.info('Gmail watch setup successful', {
+    logger.info('Watch initialized', {
       historyId: response.data.historyId,
       expiration: expirationDate.toISOString(),
       topicName
@@ -350,7 +312,7 @@ export async function initializeGmailWatch() {
     recordMetric('gmail_watch_renewals', 1);
     return response.data;
   } catch (error) {
-    logger.error('Gmail watch initialization error', {
+    logger.error('Watch initialization failed', {
       error: error.message,
       code: error.code,
       details: error.response?.data || 'No additional details'
@@ -367,13 +329,13 @@ async function stopExistingWatch() {
       userId: 'me',
       auth
     });
-    logger.info('Stopped existing Gmail watch');
+    logger.info('Stopped existing watch');
     await new Promise(resolve => setTimeout(resolve, 2000));
   } catch (error) {
     if (error.code === 404) {
-      logger.info('No existing Gmail watch to stop');
+      logger.info('No existing watch to stop');
     } else {
-      logger.warn('Gmail watch stop error', {
+      logger.warn('Watch stop failed', {
         error: error.message,
         code: error.code
       });
