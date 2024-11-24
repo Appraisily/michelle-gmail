@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { logger } from '../utils/logger.js';
 import { recordMetric } from '../utils/monitoring.js';
 import { getSecrets } from '../utils/secretManager.js';
+import { companyKnowledge } from '../data/companyKnowledge.js';
 
 let openaiClient = null;
 const APPRAISERS_API = 'https://appraisers-backend-856401495068.us-central1.run.app';
@@ -35,6 +36,30 @@ async function makeApiRequest(endpoint, token) {
     throw error;
   }
 }
+
+const systemPrompt = `You are a customer support agent for ${companyKnowledge.companyOverview.name}, a leading art and antique appraisal firm with ${companyKnowledge.companyOverview.experience} of experience. 
+
+Key company information:
+- Founded in ${companyKnowledge.companyOverview.founded}
+- ${companyKnowledge.companyOverview.experts} certified experts
+- Over ${companyKnowledge.companyOverview.completedAppraisals} appraisals completed
+- Operating in ${companyKnowledge.companyOverview.countries} countries
+- ${companyKnowledge.companyOverview.rating} rating from ${companyKnowledge.companyOverview.reviews} reviews
+
+Services:
+1. Regular Appraisal ($${companyKnowledge.services.regularAppraisal.price})
+2. Insurance Appraisal ($${companyKnowledge.services.insuranceAppraisal.price})
+3. Tax Deduction Appraisal ($${companyKnowledge.services.taxDeductionAppraisal.price})
+
+Your role is to:
+1. Provide accurate information about our services
+2. Help with appraisal-related queries
+3. Maintain a professional yet friendly tone
+4. Use company knowledge to provide detailed responses
+5. Direct technical issues to ${companyKnowledge.contact.technical.email}
+6. Escalate complex appraisal questions to our experts
+
+Always verify if the customer has a pending appraisal before providing general information.`;
 
 const appraisalFunctions = [
   {
@@ -142,17 +167,14 @@ async function checkAppraisalStatus(senderEmail) {
     const secrets = await getSecrets();
     const token = secrets['jwt-secret'];
 
-    // Get both pending and completed appraisals
     const [pending, completed] = await Promise.all([
       makeApiRequest('/api/appraisals', token),
       makeApiRequest('/api/appraisals/completed', token)
     ]);
 
-    // Filter appraisals for the sender's email
     const pendingForSender = pending.filter(a => a.customerEmail === senderEmail);
     const completedForSender = completed.filter(a => a.customerEmail === senderEmail);
 
-    // Get details for the most recent pending appraisal if any
     let latestDetails = null;
     if (pendingForSender.length > 0) {
       const latest = pendingForSender[0];
@@ -176,13 +198,12 @@ export async function classifyAndProcessEmail(emailContent, senderEmail) {
   try {
     const openai = await getOpenAIClient();
     
-    // First, analyze the email
     const analysisResponse = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: "You are an expert email analyst for an art appraisal service. Analyze emails to determine their intent, urgency, and whether they require a response. Pay special attention to mentions of appraisals, artwork, or status inquiries."
+          content: systemPrompt
         },
         {
           role: "user",
@@ -201,7 +222,6 @@ export async function classifyAndProcessEmail(emailContent, senderEmail) {
     recordMetric('email_classifications', 1);
     logger.info('Email analysis completed', analysis);
 
-    // Check appraisal status if needed
     let appraisalStatus = null;
     if (analysis.appraisalCheck) {
       appraisalStatus = await checkAppraisalStatus(senderEmail);
@@ -217,13 +237,12 @@ export async function classifyAndProcessEmail(emailContent, senderEmail) {
       };
     }
 
-    // Generate response if needed
     const responseGeneration = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: `You are a professional email assistant for an art appraisal service. Generate ${analysis.suggestedResponseType} responses while maintaining a ${analysis.urgency === 'high' ? 'prompt and' : ''} professional tone.`
+          content: systemPrompt
         },
         {
           role: "user",
