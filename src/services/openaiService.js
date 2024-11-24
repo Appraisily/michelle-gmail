@@ -21,12 +21,16 @@ const classifyEmailFunction = {
   parameters: {
     type: "object",
     properties: {
-      content: {
+      requiresReply: {
+        type: "boolean",
+        description: "Whether the email needs a response"
+      },
+      reason: {
         type: "string",
-        description: "The body of the email."
+        description: "Brief explanation of why the email does or doesn't need a reply"
       }
     },
-    required: ["content"]
+    required: ["requiresReply", "reason"]
   }
 };
 
@@ -39,22 +43,22 @@ export async function classifyAndProcessEmail(emailContent) {
       model: "gpt-4",
       messages: [{
         role: "user",
-        content: `Analyze this email and determine if it requires a reply: ${emailContent}`
+        content: `Analyze this email and determine if it requires a reply:\n\n${emailContent}`
       }],
       functions: [classifyEmailFunction],
       function_call: { name: "classifyEmail" },
       temperature: 0.3,
-      max_tokens: 60
+      max_tokens: 150
     });
 
     const functionCall = classificationResponse.choices[0].message.function_call;
-    const { content } = JSON.parse(functionCall.arguments);
-    const requiresReply = content.toLowerCase().includes('yes');
+    const { requiresReply, reason } = JSON.parse(functionCall.arguments);
 
+    logger.info('Email classification', { requiresReply, reason });
     recordMetric('email_classifications', 1);
 
     if (!requiresReply) {
-      return { requiresReply: false, generatedReply: null };
+      return { requiresReply: false, generatedReply: null, reason };
     }
 
     // Generate reply if needed
@@ -63,22 +67,23 @@ export async function classifyAndProcessEmail(emailContent) {
       messages: [
         {
           role: "system",
-          content: "You are a professional email assistant. Generate concise, helpful replies."
+          content: "You are a professional email assistant. Generate concise, helpful replies that maintain a friendly yet professional tone."
         },
         {
           role: "user",
-          content: `Generate a professional reply to this email: ${emailContent}`
+          content: `Generate a professional reply to this email:\n\n${emailContent}`
         }
       ],
       temperature: 0.7,
-      max_tokens: 300
+      max_tokens: 400
     });
 
     recordMetric('replies_generated', 1);
 
     return {
       requiresReply: true,
-      generatedReply: replyResponse.choices[0].message.content
+      generatedReply: replyResponse.choices[0].message.content,
+      reason
     };
 
   } catch (error) {

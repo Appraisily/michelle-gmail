@@ -9,7 +9,8 @@ export async function getSecrets() {
     const secretNames = [
       'GMAIL_CLIENT_ID',
       'GMAIL_CLIENT_SECRET',
-      'GMAIL_REFRESH_TOKEN'
+      'GMAIL_REFRESH_TOKEN',
+      'OPENAI_API_KEY'
     ];
 
     for (const secretName of secretNames) {

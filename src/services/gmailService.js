@@ -116,7 +116,7 @@ export async function handleWebhook(data) {
         });
 
         // Process with OpenAI
-        const { requiresReply, generatedReply } = await classifyAndProcessEmail(content);
+        const { requiresReply, generatedReply, reason } = await classifyAndProcessEmail(content);
 
         // Log to Google Sheets
         await logEmailProcessing({
@@ -124,13 +124,15 @@ export async function handleWebhook(data) {
           sender: from,
           subject,
           requiresReply,
-          reply: generatedReply || 'No reply needed'
+          reply: generatedReply || 'No reply needed',
+          reason
         });
 
         logger.info('Email processed', {
           id: fullMessage.data.id,
           requiresReply,
-          hasReply: !!generatedReply
+          hasReply: !!generatedReply,
+          reason
         });
       }
     }
