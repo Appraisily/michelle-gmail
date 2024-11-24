@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
+import { getSecrets } from '../utils/secretManager.js';
 
 const sheets = google.sheets('v4');
 let auth = null;
@@ -24,10 +25,11 @@ async function getSheetAuth() {
 export async function logEmailProcessing(logData) {
   try {
     const auth = await getSheetAuth();
-    const spreadsheetId = process.env.MICHELLE_CHAT_LOG_SPREADSHEETID;
+    const secrets = await getSecrets();
+    const spreadsheetId = secrets.MICHELLE_CHAT_LOG_SPREADSHEETID;
 
     if (!spreadsheetId) {
-      throw new Error('MICHELLE_CHAT_LOG_SPREADSHEETID not found in environment variables');
+      throw new Error('MICHELLE_CHAT_LOG_SPREADSHEETID not found in secrets');
     }
 
     logger.info('Logging to Google Sheets', {
