@@ -6,6 +6,7 @@ import { companyKnowledge } from '../data/companyKnowledge.js';
 
 let openaiClient = null;
 const APPRAISERS_API = 'https://appraisers-backend-856401495068.us-central1.run.app';
+let sharedSecret = null;
 
 async function getOpenAIClient() {
   if (!openaiClient) {
@@ -17,18 +18,25 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function makeApiRequest(endpoint, method = 'GET', body = null) {
-  try {
+async function ensureSharedSecret() {
+  if (!sharedSecret) {
     const secrets = await getSecrets();
-    const sharedSecret = secrets['SHARED_SECRET'];
-
+    sharedSecret = secrets.SHARED_SECRET;
     if (!sharedSecret) {
       throw new Error('SHARED_SECRET not found');
     }
+  }
+  return sharedSecret;
+}
+
+async function makeApiRequest(endpoint, method = 'GET', body = null) {
+  try {
+    // Ensure we have the shared secret before making the request
+    const secret = await ensureSharedSecret();
 
     const headers = {
       'Content-Type': 'application/json',
-      'x-shared-secret': sharedSecret,
+      'x-shared-secret': secret,
       'x-service-name': 'michelle-gmail'
     };
 
@@ -53,7 +61,7 @@ async function makeApiRequest(endpoint, method = 'GET', body = null) {
       throw new Error(`API request failed: ${response.status} - ${errorText}`);
     }
 
-    return await response.json();
+    return response.json();
   } catch (error) {
     logger.error('API request failed:', {
       endpoint,
