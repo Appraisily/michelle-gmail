@@ -52,6 +52,55 @@ function getEmailDetails(message) {
   return { subject, from, content, senderEmail };
 }
 
+async function processMessage(auth, messageId) {
+  try {
+    const fullMessage = await gmail.users.messages.get({
+      auth,
+      userId: 'me',
+      id: messageId,
+      format: 'full'
+    });
+
+    const { subject, from, content, senderEmail } = getEmailDetails(fullMessage.data);
+    
+    logger.info('Processing email', {
+      id: fullMessage.data.id,
+      subject,
+      from
+    });
+
+    // Process with OpenAI
+    const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(content, senderEmail);
+
+    // Log to Google Sheets
+    await logEmailProcessing({
+      timestamp: new Date().toISOString(),
+      sender: from,
+      subject,
+      requiresReply,
+      reply: generatedReply || 'No reply needed',
+      reason,
+      appraisalStatus
+    });
+
+    logger.info('Email processed', {
+      id: fullMessage.data.id,
+      requiresReply,
+      hasReply: !!generatedReply,
+      reason,
+      hasAppraisalStatus: !!appraisalStatus
+    });
+
+    return true;
+  } catch (error) {
+    if (error.code === 404) {
+      logger.warn('Message not found, skipping', { messageId });
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function handleWebhook(data) {
   try {
     logger.info('Processing webhook data', { data: JSON.stringify(data) });
@@ -83,68 +132,50 @@ export async function handleWebhook(data) {
       return;
     }
 
-    // Get message history
-    const history = await gmail.users.history.list({
-      auth,
-      userId: 'me',
-      startHistoryId: lastHistoryId
-    });
+    try {
+      // Get message history
+      const history = await gmail.users.history.list({
+        auth,
+        userId: 'me',
+        startHistoryId: lastHistoryId
+      });
 
-    logger.info('History retrieved', {
-      hasHistory: !!history.data.history,
-      count: history.data.history?.length || 0
-    });
+      logger.info('History retrieved', {
+        hasHistory: !!history.data.history,
+        count: history.data.history?.length || 0
+      });
 
-    if (!history.data.history) {
-      return;
-    }
-
-    // Process new messages
-    for (const item of history.data.history) {
-      if (!item.messages) continue;
-
-      for (const message of item.messages) {
-        const fullMessage = await gmail.users.messages.get({
-          auth,
-          userId: 'me',
-          id: message.id,
-          format: 'full'
-        });
-
-        const { subject, from, content, senderEmail } = getEmailDetails(fullMessage.data);
-        
-        logger.info('Processing email', {
-          id: fullMessage.data.id,
-          subject,
-          from
-        });
-
-        // Process with OpenAI
-        const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(content, senderEmail);
-
-        // Log to Google Sheets
-        await logEmailProcessing({
-          timestamp: new Date().toISOString(),
-          sender: from,
-          subject,
-          requiresReply,
-          reply: generatedReply || 'No reply needed',
-          reason,
-          appraisalStatus
-        });
-
-        logger.info('Email processed', {
-          id: fullMessage.data.id,
-          requiresReply,
-          hasReply: !!generatedReply,
-          reason,
-          hasAppraisalStatus: !!appraisalStatus
-        });
+      if (!history.data.history) {
+        return;
       }
+
+      // Process new messages
+      for (const item of history.data.history) {
+        if (!item.messages) continue;
+
+        // Process each message
+        const processPromises = item.messages.map(message => 
+          processMessage(auth, message.id)
+        );
+
+        // Wait for all messages to be processed
+        await Promise.all(processPromises);
+      }
+
+      // Update lastHistoryId only after successful processing
+      lastHistoryId = notification.historyId;
+      logger.info('Updated historyId', { historyId: lastHistoryId });
+
+    } catch (error) {
+      // If we get an invalid history ID error, reset and try again
+      if (error.code === 404) {
+        lastHistoryId = null;
+        logger.warn('History ID invalid, resetting', { error: error.message });
+        return;
+      }
+      throw error;
     }
 
-    lastHistoryId = notification.historyId;
-    logger.info('Updated historyId', { historyId: lastHistoryId });
   } catch (error) {
     logger.error('Webhook processing failed:', error);
     throw error;
