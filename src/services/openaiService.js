@@ -3,6 +3,7 @@ import { logger } from '../utils/logger.js';
 import { recordMetric } from '../utils/monitoring.js';
 import { getSecrets } from '../utils/secretManager.js';
 import { companyKnowledge } from '../data/companyKnowledge.js';
+import jwt from 'jsonwebtoken';
 
 let openaiClient = null;
 const APPRAISERS_API = 'https://appraisers-backend-856401495068.us-central1.run.app';
@@ -17,18 +18,55 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function makeApiRequest(endpoint, method = 'GET', body = null) {
+async function generateJWT() {
   try {
     const secrets = await getSecrets();
-    const token = secrets['jwt-secret'];
+    const jwtSecret = secrets['jwt-secret'];
+
+    if (!jwtSecret) {
+      throw new Error('JWT secret not found');
+    }
+
+    // Generate a new JWT token with the exact format expected by the Appraisers API
+    const token = jwt.sign(
+      {
+        service: 'michelle-gmail',
+        type: 'service-account',
+        projectId: process.env.PROJECT_ID,
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + (60 * 60) // 1 hour expiration
+      },
+      jwtSecret,
+      {
+        algorithm: 'HS256',
+        noTimestamp: false
+      }
+    );
+
+    return token;
+  } catch (error) {
+    logger.error('Error generating JWT:', {
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
+  }
+}
+
+async function makeApiRequest(endpoint, method = 'GET', body = null) {
+  try {
+    const token = await generateJWT();
 
     if (!token) {
-      throw new Error('JWT token not found in secrets');
+      throw new Error('Failed to generate JWT token');
     }
+
+    logger.info('Generated JWT token for API request');
 
     const headers = {
       'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'X-Service-Name': 'michelle-gmail'
     };
 
     const options = {
@@ -37,7 +75,14 @@ async function makeApiRequest(endpoint, method = 'GET', body = null) {
       ...(body && { body: JSON.stringify(body) })
     };
 
-    logger.info(`Making API request to ${endpoint}`, { method });
+    logger.info(`Making API request to ${endpoint}`, { 
+      method,
+      headers: {
+        ...headers,
+        'Authorization': 'Bearer [REDACTED]'
+      }
+    });
+
     const response = await fetch(`${APPRAISERS_API}${endpoint}`, options);
 
     if (!response.ok) {
@@ -56,6 +101,7 @@ async function makeApiRequest(endpoint, method = 'GET', body = null) {
   }
 }
 
+// Rest of the file remains unchanged
 const systemPrompt = `You are a customer support agent for ${companyKnowledge.companyOverview.name}, a leading art and antique appraisal firm with ${companyKnowledge.companyOverview.experience} of experience. 
 
 Key company information:
