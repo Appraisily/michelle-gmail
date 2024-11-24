@@ -1,6 +1,8 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
+import { classifyAndProcessEmail } from './openaiService.js';
+import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
 let lastHistoryId = null;
@@ -18,6 +20,32 @@ async function getGmailAuth() {
   });
 
   return auth;
+}
+
+function parseEmailContent(payload) {
+  let content = '';
+  
+  if (payload.mimeType === 'text/plain' && payload.body.data) {
+    content = Buffer.from(payload.body.data, 'base64').toString();
+  } else if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body.data) {
+        content = Buffer.from(part.body.data, 'base64').toString();
+        break;
+      }
+    }
+  }
+  
+  return content;
+}
+
+function getEmailDetails(message) {
+  const headers = message.payload.headers;
+  const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
+  const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown Sender';
+  const content = parseEmailContent(message.payload);
+  
+  return { subject, from, content };
 }
 
 export async function handleWebhook(data) {
@@ -75,12 +103,34 @@ export async function handleWebhook(data) {
         const fullMessage = await gmail.users.messages.get({
           auth,
           userId: 'me',
-          id: message.id
+          id: message.id,
+          format: 'full'
         });
 
-        logger.info('New message', {
+        const { subject, from, content } = getEmailDetails(fullMessage.data);
+        
+        logger.info('Processing email', {
           id: fullMessage.data.id,
-          snippet: fullMessage.data.snippet
+          subject,
+          from
+        });
+
+        // Process with OpenAI
+        const { requiresReply, generatedReply } = await classifyAndProcessEmail(content);
+
+        // Log to Google Sheets
+        await logEmailProcessing({
+          timestamp: new Date().toISOString(),
+          sender: from,
+          subject,
+          requiresReply,
+          reply: generatedReply || 'No reply needed'
+        });
+
+        logger.info('Email processed', {
+          id: fullMessage.data.id,
+          requiresReply,
+          hasReply: !!generatedReply
         });
       }
     }
