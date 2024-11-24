@@ -7,7 +7,6 @@ let auth = null;
 async function getSheetAuth() {
   if (!auth) {
     try {
-      // Use Google Cloud's built-in authentication
       const googleAuth = new google.auth.GoogleAuth({
         scopes: ['https://www.googleapis.com/auth/spreadsheets']
       });
@@ -15,10 +14,7 @@ async function getSheetAuth() {
       auth = await googleAuth.getClient();
       logger.info('Google Sheets authentication initialized');
     } catch (error) {
-      logger.error('Failed to initialize Google Sheets auth', {
-        error: error.message,
-        stack: error.stack
-      });
+      logger.error('Failed to initialize Google Sheets auth:', error);
       throw error;
     }
   }
@@ -31,7 +27,7 @@ export async function logEmailProcessing(logData) {
     const spreadsheetId = process.env.MICHELLE_CHAT_LOG_SPREADSHEETID;
 
     if (!spreadsheetId) {
-      throw new Error('Spreadsheet ID not found in environment variables');
+      throw new Error('MICHELLE_CHAT_LOG_SPREADSHEETID not found in environment variables');
     }
 
     logger.info('Logging to Google Sheets', {
@@ -40,18 +36,23 @@ export async function logEmailProcessing(logData) {
       subject: logData.subject
     });
 
+    const timestamp = new Date().toLocaleString('en-US', {
+      timeZone: 'America/New_York'
+    });
+
     await sheets.spreadsheets.values.append({
       auth,
       spreadsheetId,
-      range: 'Logs!A:E',
-      valueInputOption: 'RAW',
+      range: 'Logs!A:F',
+      valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
         values: [[
-          logData.timestamp,
+          timestamp,
           logData.sender,
           logData.subject,
           logData.requiresReply ? 'Yes' : 'No',
+          logData.reason,
           logData.reply
         ]]
       }
@@ -59,17 +60,20 @@ export async function logEmailProcessing(logData) {
 
     logger.info('Email processing logged successfully', {
       spreadsheetId,
-      timestamp: logData.timestamp
+      timestamp
     });
   } catch (error) {
-    logger.error('Error logging to Google Sheets', {
+    logger.error('Error logging to Google Sheets:', {
       error: error.message,
       stack: error.stack,
       data: {
         sender: logData.sender,
         subject: logData.subject,
-        timestamp: logData.timestamp
+        timestamp: new Date().toISOString()
       }
     });
+    
+    // Don't throw the error to prevent webhook failure
+    // Just log it and continue
   }
 }
