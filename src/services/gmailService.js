@@ -45,7 +45,11 @@ function getEmailDetails(message) {
   const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown Sender';
   const content = parseEmailContent(message.payload);
   
-  return { subject, from, content };
+  // Extract email address from the "from" field
+  const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
+  const senderEmail = emailMatch[1];
+  
+  return { subject, from, content, senderEmail };
 }
 
 export async function handleWebhook(data) {
@@ -107,7 +111,7 @@ export async function handleWebhook(data) {
           format: 'full'
         });
 
-        const { subject, from, content } = getEmailDetails(fullMessage.data);
+        const { subject, from, content, senderEmail } = getEmailDetails(fullMessage.data);
         
         logger.info('Processing email', {
           id: fullMessage.data.id,
@@ -116,7 +120,7 @@ export async function handleWebhook(data) {
         });
 
         // Process with OpenAI
-        const { requiresReply, generatedReply, reason } = await classifyAndProcessEmail(content);
+        const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(content, senderEmail);
 
         // Log to Google Sheets
         await logEmailProcessing({
@@ -125,14 +129,16 @@ export async function handleWebhook(data) {
           subject,
           requiresReply,
           reply: generatedReply || 'No reply needed',
-          reason
+          reason,
+          appraisalStatus
         });
 
         logger.info('Email processed', {
           id: fullMessage.data.id,
           requiresReply,
           hasReply: !!generatedReply,
-          reason
+          reason,
+          hasAppraisalStatus: !!appraisalStatus
         });
       }
     }

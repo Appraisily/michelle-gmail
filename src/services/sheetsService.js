@@ -42,21 +42,27 @@ export async function logEmailProcessing(logData) {
       timeZone: 'America/New_York'
     });
 
+    const values = [
+      timestamp,
+      logData.sender,
+      logData.subject,
+      logData.requiresReply ? 'Yes' : 'No',
+      logData.reason,
+      logData.analysis?.intent || 'N/A',
+      logData.analysis?.urgency || 'N/A',
+      logData.analysis?.suggestedResponseType || 'N/A',
+      logData.responseData?.tone || 'N/A',
+      logData.reply || 'No reply needed'
+    ];
+
     await sheets.spreadsheets.values.append({
       auth,
       spreadsheetId,
-      range: 'Logs!A:F',
+      range: 'Logs!A:J',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[
-          timestamp,
-          logData.sender,
-          logData.subject,
-          logData.requiresReply ? 'Yes' : 'No',
-          logData.reason,
-          logData.reply
-        ]]
+        values: [values]
       }
     });
 

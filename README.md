@@ -180,6 +180,104 @@ MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID for logging
 - **Cloud Run**: Hosts the service
 - **Secret Manager**: Securely stores credentials
 
+## API Endpoints
+
+### GET /api/appraisals
+
+Retrieves a list of all pending appraisals that haven't been completed yet.
+
+**Authentication:**
+- Requires JWT token in cookie or Authorization header
+- Format: `Authorization: Bearer <token>`
+
+**Response Format:**
+```json
+[
+  {
+    "id": "number",          // Row ID in spreadsheet
+    "date": "string",        // Submission date (YYYY-MM-DD)
+    "appraisalType": "string", // Type (RegularArt or PremiumArt)
+    "identifier": "string",  // Unique session ID
+    "status": "string",     // Current status (e.g., "Pending", "In Progress")
+    "wordpressUrl": "string", // WordPress edit URL
+    "iaDescription": "string" // AI-generated description
+  }
+]
+```
+
+### GET /api/appraisals/completed
+
+Retrieves a list of all completed appraisals.
+
+**Authentication:**
+- Requires JWT token in cookie or Authorization header
+- Format: `Authorization: Bearer <token>`
+
+**Response Format:**
+```json
+[
+  {
+    "id": "number",          // Row ID in spreadsheet
+    "date": "string",        // Completion date (YYYY-MM-DD)
+    "appraisalType": "string", // Type (RegularArt or PremiumArt)
+    "identifier": "string",  // Unique session ID
+    "status": "string",     // Always "Completed"
+    "wordpressUrl": "string", // WordPress edit URL
+    "iaDescription": "string" // AI-generated description
+  }
+]
+```
+
+### GET /api/appraisals/:id/list
+
+Retrieves detailed information about a specific appraisal.
+
+**Authentication:**
+- Requires JWT token in cookie or Authorization header
+- Format: `Authorization: Bearer <token>`
+
+**Parameters:**
+- id: Row number in Google Sheets (required)
+
+**Response Format:**
+```json
+{
+  "id": "number",           // Row ID in spreadsheet
+  "date": "string",         // Submission date (YYYY-MM-DD)
+  "appraisalType": "string", // Type (RegularArt or PremiumArt)
+  "identifier": "string",   // Unique session ID
+  "customerEmail": "string", // Customer's email address
+  "customerName": "string",  // Customer's name
+  "status": "string",      // Current status
+  "wordpressUrl": "string", // WordPress edit URL
+  "iaDescription": "string", // AI-generated description
+  "customerDescription": "string", // Customer-provided description
+  "images": {
+    "main": "string",      // URL of main artwork image
+    "age": "string",       // URL of age verification image
+    "signature": "string"  // URL of signature/marks image
+  }
+}
+```
+
+### Error Responses
+
+All endpoints use the following error response format:
+
+```json
+{
+  "success": false,
+  "message": "Error description"
+}
+```
+
+**Common HTTP Status Codes:**
+- 200: Success
+- 401: Unauthorized - Missing or invalid token
+- 403: Forbidden - Valid token but insufficient permissions
+- 404: Not Found - Appraisal not found
+- 500: Internal Server Error
+
 ## Monitoring
 
 The service includes built-in monitoring using Cloud Monitoring:

@@ -4,6 +4,7 @@ import { recordMetric } from '../utils/monitoring.js';
 import { getSecrets } from '../utils/secretManager.js';
 
 let openaiClient = null;
+const APPRAISERS_API = 'https://appraisers-backend-856401495068.us-central1.run.app';
 
 async function getOpenAIClient() {
   if (!openaiClient) {
@@ -15,75 +16,238 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-const classifyEmailFunction = {
-  name: "classifyEmail",
-  description: "Determines whether an email requires a response.",
-  parameters: {
-    type: "object",
-    properties: {
-      requiresReply: {
-        type: "boolean",
-        description: "Whether the email needs a response"
-      },
-      reason: {
-        type: "string",
-        description: "Brief explanation of why the email does or doesn't need a reply"
+async function makeApiRequest(endpoint, token) {
+  try {
+    const response = await fetch(`${APPRAISERS_API}${endpoint}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
       }
-    },
-    required: ["requiresReply", "reason"]
-  }
-};
+    });
 
-export async function classifyAndProcessEmail(emailContent) {
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    logger.error('API request failed:', error);
+    throw error;
+  }
+}
+
+const appraisalFunctions = [
+  {
+    name: "getPendingAppraisals",
+    description: "Retrieves a list of all pending appraisals",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "getCompletedAppraisals",
+    description: "Retrieves a list of all completed appraisals",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: "getAppraisalDetails",
+    description: "Retrieves detailed information about a specific appraisal",
+    parameters: {
+      type: "object",
+      properties: {
+        id: {
+          type: "number",
+          description: "The row ID of the appraisal in the spreadsheet"
+        }
+      },
+      required: ["id"]
+    }
+  }
+];
+
+const emailFunctions = [
+  {
+    name: "analyzeEmail",
+    description: "Analyzes an email to determine its intent, urgency, and required action",
+    parameters: {
+      type: "object",
+      properties: {
+        intent: {
+          type: "string",
+          enum: ["question", "request", "information", "followup", "other"],
+          description: "The primary intent of the email"
+        },
+        urgency: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "The urgency level of the email"
+        },
+        requiresReply: {
+          type: "boolean",
+          description: "Whether the email needs a response"
+        },
+        reason: {
+          type: "string",
+          description: "Detailed explanation of the analysis"
+        },
+        suggestedResponseType: {
+          type: "string",
+          enum: ["detailed", "brief", "confirmation", "none"],
+          description: "The recommended type of response"
+        },
+        appraisalCheck: {
+          type: "boolean",
+          description: "Whether to check appraisal status for the sender"
+        }
+      },
+      required: ["intent", "urgency", "requiresReply", "reason", "suggestedResponseType"]
+    }
+  },
+  {
+    name: "generateResponse",
+    description: "Generates an appropriate email response based on the analysis",
+    parameters: {
+      type: "object",
+      properties: {
+        response: {
+          type: "string",
+          description: "The generated email response"
+        },
+        tone: {
+          type: "string",
+          enum: ["formal", "friendly", "neutral"],
+          description: "The tone used in the response"
+        },
+        nextSteps: {
+          type: "array",
+          items: {
+            type: "string"
+          },
+          description: "Suggested follow-up actions if any"
+        }
+      },
+      required: ["response", "tone"]
+    }
+  }
+];
+
+async function checkAppraisalStatus(senderEmail) {
+  try {
+    const secrets = await getSecrets();
+    const token = secrets['jwt-secret'];
+
+    // Get both pending and completed appraisals
+    const [pending, completed] = await Promise.all([
+      makeApiRequest('/api/appraisals', token),
+      makeApiRequest('/api/appraisals/completed', token)
+    ]);
+
+    // Filter appraisals for the sender's email
+    const pendingForSender = pending.filter(a => a.customerEmail === senderEmail);
+    const completedForSender = completed.filter(a => a.customerEmail === senderEmail);
+
+    // Get details for the most recent pending appraisal if any
+    let latestDetails = null;
+    if (pendingForSender.length > 0) {
+      const latest = pendingForSender[0];
+      latestDetails = await makeApiRequest(`/api/appraisals/${latest.id}/list`, token);
+    }
+
+    return {
+      hasPending: pendingForSender.length > 0,
+      hasCompleted: completedForSender.length > 0,
+      pendingCount: pendingForSender.length,
+      completedCount: completedForSender.length,
+      latestAppraisal: latestDetails
+    };
+  } catch (error) {
+    logger.error('Error checking appraisal status:', error);
+    return null;
+  }
+}
+
+export async function classifyAndProcessEmail(emailContent, senderEmail) {
   try {
     const openai = await getOpenAIClient();
     
-    // First, classify if the email needs a reply using function calling
-    const classificationResponse = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [{
-        role: "user",
-        content: `Analyze this email and determine if it requires a reply:\n\n${emailContent}`
-      }],
-      functions: [classifyEmailFunction],
-      function_call: { name: "classifyEmail" },
-      temperature: 0.3,
-      max_tokens: 150
-    });
-
-    const functionCall = classificationResponse.choices[0].message.function_call;
-    const { requiresReply, reason } = JSON.parse(functionCall.arguments);
-
-    logger.info('Email classification', { requiresReply, reason });
-    recordMetric('email_classifications', 1);
-
-    if (!requiresReply) {
-      return { requiresReply: false, generatedReply: null, reason };
-    }
-
-    // Generate reply if needed
-    const replyResponse = await openai.chat.completions.create({
+    // First, analyze the email
+    const analysisResponse = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: "You are a professional email assistant. Generate concise, helpful replies that maintain a friendly yet professional tone."
+          content: "You are an expert email analyst for an art appraisal service. Analyze emails to determine their intent, urgency, and whether they require a response. Pay special attention to mentions of appraisals, artwork, or status inquiries."
         },
         {
           role: "user",
-          content: `Generate a professional reply to this email:\n\n${emailContent}`
+          content: `Analyze this email thoroughly:\n\n${emailContent}`
         }
       ],
-      temperature: 0.7,
-      max_tokens: 400
+      functions: [emailFunctions[0]],
+      function_call: { name: "analyzeEmail" },
+      temperature: 0.3
     });
+
+    const analysis = JSON.parse(
+      analysisResponse.choices[0].message.function_call.arguments
+    );
+
+    recordMetric('email_classifications', 1);
+    logger.info('Email analysis completed', analysis);
+
+    // Check appraisal status if needed
+    let appraisalStatus = null;
+    if (analysis.appraisalCheck) {
+      appraisalStatus = await checkAppraisalStatus(senderEmail);
+    }
+
+    if (!analysis.requiresReply) {
+      return {
+        requiresReply: false,
+        generatedReply: null,
+        reason: analysis.reason,
+        analysis,
+        appraisalStatus
+      };
+    }
+
+    // Generate response if needed
+    const responseGeneration = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: `You are a professional email assistant for an art appraisal service. Generate ${analysis.suggestedResponseType} responses while maintaining a ${analysis.urgency === 'high' ? 'prompt and' : ''} professional tone.`
+        },
+        {
+          role: "user",
+          content: `Original email:\n${emailContent}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nAppraisal Status: ${JSON.stringify(appraisalStatus)}\n\nGenerate an appropriate response.`
+        }
+      ],
+      functions: [emailFunctions[1]],
+      function_call: { name: "generateResponse" },
+      temperature: 0.7
+    });
+
+    const responseData = JSON.parse(
+      responseGeneration.choices[0].message.function_call.arguments
+    );
 
     recordMetric('replies_generated', 1);
 
     return {
       requiresReply: true,
-      generatedReply: replyResponse.choices[0].message.content,
-      reason
+      generatedReply: responseData.response,
+      reason: analysis.reason,
+      analysis,
+      responseData,
+      appraisalStatus
     };
 
   } catch (error) {
