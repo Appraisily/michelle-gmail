@@ -17,22 +17,41 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function makeApiRequest(endpoint, token) {
+async function makeApiRequest(endpoint, method = 'GET', body = null) {
   try {
-    const response = await fetch(`${APPRAISERS_API}${endpoint}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    const secrets = await getSecrets();
+    const token = secrets['jwt-secret'];
+
+    if (!token) {
+      throw new Error('JWT token not found in secrets');
+    }
+
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+
+    const options = {
+      method,
+      headers,
+      ...(body && { body: JSON.stringify(body) })
+    };
+
+    logger.info(`Making API request to ${endpoint}`, { method });
+    const response = await fetch(`${APPRAISERS_API}${endpoint}`, options);
 
     if (!response.ok) {
-      throw new Error(`API request failed: ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`API request failed: ${response.status} - ${errorText}`);
     }
 
     return await response.json();
   } catch (error) {
-    logger.error('API request failed:', error);
+    logger.error('API request failed:', {
+      endpoint,
+      error: error.message,
+      stack: error.stack
+    });
     throw error;
   }
 }
@@ -164,12 +183,11 @@ const emailFunctions = [
 
 async function checkAppraisalStatus(senderEmail) {
   try {
-    const secrets = await getSecrets();
-    const token = secrets['jwt-secret'];
+    logger.info('Checking appraisal status for:', { senderEmail });
 
     const [pending, completed] = await Promise.all([
-      makeApiRequest('/api/appraisals', token),
-      makeApiRequest('/api/appraisals/completed', token)
+      makeApiRequest('/api/appraisals'),
+      makeApiRequest('/api/appraisals/completed')
     ]);
 
     const pendingForSender = pending.filter(a => a.customerEmail === senderEmail);
@@ -178,18 +196,25 @@ async function checkAppraisalStatus(senderEmail) {
     let latestDetails = null;
     if (pendingForSender.length > 0) {
       const latest = pendingForSender[0];
-      latestDetails = await makeApiRequest(`/api/appraisals/${latest.id}/list`, token);
+      latestDetails = await makeApiRequest(`/api/appraisals/${latest.id}/list`);
     }
 
-    return {
+    const status = {
       hasPending: pendingForSender.length > 0,
       hasCompleted: completedForSender.length > 0,
       pendingCount: pendingForSender.length,
       completedCount: completedForSender.length,
       latestAppraisal: latestDetails
     };
+
+    logger.info('Appraisal status retrieved:', status);
+    return status;
   } catch (error) {
-    logger.error('Error checking appraisal status:', error);
+    logger.error('Error checking appraisal status:', {
+      senderEmail,
+      error: error.message,
+      stack: error.stack
+    });
     return null;
   }
 }
