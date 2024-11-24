@@ -3,7 +3,6 @@ import { logger } from '../utils/logger.js';
 import { recordMetric } from '../utils/monitoring.js';
 import { getSecrets } from '../utils/secretManager.js';
 import { companyKnowledge } from '../data/companyKnowledge.js';
-import jwt from 'jsonwebtoken';
 
 let openaiClient = null;
 const APPRAISERS_API = 'https://appraisers-backend-856401495068.us-central1.run.app';
@@ -18,55 +17,19 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function generateJWT() {
-  try {
-    const secrets = await getSecrets();
-    const jwtSecret = secrets['jwt-secret'];
-
-    if (!jwtSecret) {
-      throw new Error('JWT secret not found');
-    }
-
-    // Generate a new JWT token with the exact format expected by the Appraisers API
-    const token = jwt.sign(
-      {
-        service: 'michelle-gmail',
-        type: 'service-account',
-        projectId: process.env.PROJECT_ID,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + (60 * 60) // 1 hour expiration
-      },
-      jwtSecret,
-      {
-        algorithm: 'HS256',
-        noTimestamp: false
-      }
-    );
-
-    return token;
-  } catch (error) {
-    logger.error('Error generating JWT:', {
-      error: error.message,
-      stack: error.stack
-    });
-    throw error;
-  }
-}
-
 async function makeApiRequest(endpoint, method = 'GET', body = null) {
   try {
-    const token = await generateJWT();
+    const secrets = await getSecrets();
+    const sharedSecret = secrets['SHARED_SECRET'];
 
-    if (!token) {
-      throw new Error('Failed to generate JWT token');
+    if (!sharedSecret) {
+      throw new Error('SHARED_SECRET not found');
     }
 
-    logger.info('Generated JWT token for API request');
-
     const headers = {
-      'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
-      'X-Service-Name': 'michelle-gmail'
+      'x-shared-secret': sharedSecret,
+      'x-service-name': 'michelle-gmail'
     };
 
     const options = {
@@ -79,11 +42,11 @@ async function makeApiRequest(endpoint, method = 'GET', body = null) {
       method,
       headers: {
         ...headers,
-        'Authorization': 'Bearer [REDACTED]'
+        'x-shared-secret': '[REDACTED]'
       }
     });
 
-    const response = await fetch(`${APPRAISERS_API}${endpoint}`, options);
+    const response = await fetch(`${APPRAISERS_API}/api${endpoint}`, options);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -101,7 +64,6 @@ async function makeApiRequest(endpoint, method = 'GET', body = null) {
   }
 }
 
-// Rest of the file remains unchanged
 const systemPrompt = `You are a customer support agent for ${companyKnowledge.companyOverview.name}, a leading art and antique appraisal firm with ${companyKnowledge.companyOverview.experience} of experience. 
 
 Key company information:
@@ -232,8 +194,8 @@ async function checkAppraisalStatus(senderEmail) {
     logger.info('Checking appraisal status for:', { senderEmail });
 
     const [pending, completed] = await Promise.all([
-      makeApiRequest('/api/appraisals'),
-      makeApiRequest('/api/appraisals/completed')
+      makeApiRequest('/appraisals'),
+      makeApiRequest('/appraisals/completed')
     ]);
 
     const pendingForSender = pending.filter(a => a.customerEmail === senderEmail);
@@ -242,7 +204,7 @@ async function checkAppraisalStatus(senderEmail) {
     let latestDetails = null;
     if (pendingForSender.length > 0) {
       const latest = pendingForSender[0];
-      latestDetails = await makeApiRequest(`/api/appraisals/${latest.id}/list`);
+      latestDetails = await makeApiRequest(`/appraisals/${latest.id}/list`);
     }
 
     const status = {
