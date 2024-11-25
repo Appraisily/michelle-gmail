@@ -19,6 +19,34 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
+async function handleFunctionCall(functionCall, senderEmail) {
+  try {
+    const { name, arguments: args } = functionCall;
+    const parsedArgs = JSON.parse(args);
+
+    logger.info('Handling function call', {
+      function: name,
+      args: parsedArgs
+    });
+
+    if (name === 'makeDataHubRequest') {
+      const { endpoint, method, params } = parsedArgs;
+      // Add email to params if not provided
+      const finalParams = {
+        ...params,
+        email: params?.email || senderEmail
+      };
+      
+      return await dataHubClient.makeRequest(endpoint, method, finalParams);
+    }
+
+    return null;
+  } catch (error) {
+    logger.error('Error handling function call:', error);
+    return null;
+  }
+}
+
 export async function classifyAndProcessEmail(emailContent, senderEmail, threadMessages = null) {
   try {
     logger.info('Starting email classification process', {
@@ -56,19 +84,39 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
       temperature: 0.3
     });
 
-    const analysis = JSON.parse(
-      analysisResponse.choices[0].message.function_call.arguments
-    );
+    // Handle any function calls from analysis
+    let customerData = null;
+    if (analysisResponse.choices[0].message.function_call) {
+      customerData = await handleFunctionCall(
+        analysisResponse.choices[0].message.function_call,
+        senderEmail
+      );
+    }
+
+    // Get the analysis result
+    const analysis = analysisResponse.choices[0].message.content
+      ? JSON.parse(analysisResponse.choices[0].message.content)
+      : {
+          requiresReply: true,
+          intent: "unknown",
+          urgency: "medium",
+          reason: "Unable to parse analysis",
+          suggestedResponseType: "detailed"
+        };
 
     recordMetric('email_classifications', 1);
-    logger.info('Email analysis completed', analysis);
+    logger.info('Email analysis completed', {
+      analysis,
+      hasCustomerData: !!customerData
+    });
 
     if (!analysis.requiresReply) {
       return {
         requiresReply: false,
         generatedReply: null,
         reason: analysis.reason,
-        analysis
+        analysis,
+        customerData
       };
     }
 
@@ -86,30 +134,42 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
         },
         {
           role: "user",
-          content: `Full email thread:\n${fullContext}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nGenerate an appropriate response.`
+          content: `Full email thread:\n${fullContext}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nCustomer Data: ${JSON.stringify(customerData)}\n\nGenerate an appropriate response.`
         }
       ],
-      functions: [dataHubFunctions.makeRequest],
-      function_call: "auto",
       temperature: 0.7
     });
 
-    const responseData = JSON.parse(
-      responseGeneration.choices[0].message.function_call.arguments
-    );
+    const responseContent = responseGeneration.choices[0].message.content;
+    
+    // Handle any function calls from response generation
+    if (responseGeneration.choices[0].message.function_call) {
+      await handleFunctionCall(
+        responseGeneration.choices[0].message.function_call,
+        senderEmail
+      );
+    }
 
     recordMetric('replies_generated', 1);
 
     return {
       requiresReply: true,
-      generatedReply: responseData.response,
+      generatedReply: responseContent,
       reason: analysis.reason,
       analysis,
-      responseData
+      customerData
     };
 
   } catch (error) {
-    logger.error('Error in OpenAI service:', error);
+    logger.error('Error in OpenAI service:', {
+      error: error.message,
+      stack: error.stack,
+      context: {
+        hasThread: !!threadMessages,
+        senderEmail
+      },
+      phase: error.phase || 'unknown'
+    });
     recordMetric('openai_failures', 1);
     throw error;
   }
