@@ -33,6 +33,7 @@ This service automatically processes incoming emails using Gmail API watch notif
    - Gmail OAuth2 credentials
    - Service account with appropriate permissions
    - OpenAI API key for email processing
+   - Data Hub API key for appraisal status checks
    - Google Sheets access for logging
 
 3. **Runtime Requirements**
@@ -71,6 +72,8 @@ This service automatically processes incoming emails using Gmail API watch notif
    Gmail API (fetch full message)
      ↓
    OpenAI (classification)
+     ↓
+   Data Hub API (appraisal status)
      ↓
    Gmail API (send reply)
      ↓
@@ -132,6 +135,7 @@ GMAIL_CLIENT_SECRET      # Gmail OAuth Client Secret
 GMAIL_REFRESH_TOKEN      # Gmail OAuth Refresh Token
 OPENAI_API_KEY          # OpenAI API Key for email classification
 MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID for logging
+DATA_HUB_API_KEY        # API Key for Data Hub backend access
 ```
 
 ## Setup Instructions
@@ -157,6 +161,7 @@ MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID for logging
    gcloud secrets create GMAIL_REFRESH_TOKEN --replication-policy="automatic"
    gcloud secrets create OPENAI_API_KEY --replication-policy="automatic"
    gcloud secrets create MICHELLE_CHAT_LOG_SPREADSHEETID --replication-policy="automatic"
+   gcloud secrets create DATA_HUB_API_KEY --replication-policy="automatic"
 
    # Add secret versions (replace with actual values)
    echo -n "your-client-id" | gcloud secrets versions add GMAIL_CLIENT_ID --data-file=-
@@ -164,6 +169,7 @@ MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID for logging
    echo -n "your-refresh-token" | gcloud secrets versions add GMAIL_REFRESH_TOKEN --data-file=-
    echo -n "your-openai-key" | gcloud secrets versions add OPENAI_API_KEY --data-file=-
    echo -n "your-sheet-id" | gcloud secrets versions add MICHELLE_CHAT_LOG_SPREADSHEETID --data-file=-
+   echo -n "your-data-hub-key" | gcloud secrets versions add DATA_HUB_API_KEY --data-file=-
    ```
 
 3. Deploy using Cloud Build:
@@ -176,107 +182,53 @@ MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID for logging
 - **Gmail Watch**: Monitors inbox for new emails
 - **Pub/Sub**: Handles Gmail notifications
 - **OpenAI**: Classifies emails and generates responses
+- **Data Hub API**: Provides appraisal status information
 - **Google Sheets**: Logs all email processing activities
 - **Cloud Run**: Hosts the service
 - **Secret Manager**: Securely stores credentials
 
-## API Endpoints
+## Data Hub API Integration
 
-### GET /api/appraisals
+The service integrates with the Data Hub API to retrieve appraisal information:
 
-Retrieves a list of all pending appraisals that haven't been completed yet.
-
-**Authentication:**
-- Requires JWT token in cookie or Authorization header
-- Format: `Authorization: Bearer <token>`
-
-**Response Format:**
-```json
-[
-  {
-    "id": "number",          // Row ID in spreadsheet
-    "date": "string",        // Submission date (YYYY-MM-DD)
-    "appraisalType": "string", // Type (RegularArt or PremiumArt)
-    "identifier": "string",  // Unique session ID
-    "status": "string",     // Current status (e.g., "Pending", "In Progress")
-    "wordpressUrl": "string", // WordPress edit URL
-    "iaDescription": "string" // AI-generated description
-  }
-]
+### Endpoint
+```
+GET https://data-hub-856401495068.us-central1.run.app/api/appraisals/pending
 ```
 
-### GET /api/appraisals/completed
-
-Retrieves a list of all completed appraisals.
-
-**Authentication:**
-- Requires JWT token in cookie or Authorization header
-- Format: `Authorization: Bearer <token>`
-
-**Response Format:**
-```json
-[
-  {
-    "id": "number",          // Row ID in spreadsheet
-    "date": "string",        // Completion date (YYYY-MM-DD)
-    "appraisalType": "string", // Type (RegularArt or PremiumArt)
-    "identifier": "string",  // Unique session ID
-    "status": "string",     // Always "Completed"
-    "wordpressUrl": "string", // WordPress edit URL
-    "iaDescription": "string" // AI-generated description
-  }
-]
+### Authentication
+```
+X-API-Key: [DATA_HUB_API_KEY]
 ```
 
-### GET /api/appraisals/:id/list
+### Query Parameters
+- `email`: Filter appraisals by customer email
 
-Retrieves detailed information about a specific appraisal.
-
-**Authentication:**
-- Requires JWT token in cookie or Authorization header
-- Format: `Authorization: Bearer <token>`
-
-**Parameters:**
-- id: Row number in Google Sheets (required)
-
-**Response Format:**
+### Response Format
 ```json
 {
-  "id": "number",           // Row ID in spreadsheet
-  "date": "string",         // Submission date (YYYY-MM-DD)
-  "appraisalType": "string", // Type (RegularArt or PremiumArt)
-  "identifier": "string",   // Unique session ID
-  "customerEmail": "string", // Customer's email address
-  "customerName": "string",  // Customer's name
-  "status": "string",      // Current status
-  "wordpressUrl": "string", // WordPress edit URL
-  "iaDescription": "string", // AI-generated description
-  "customerDescription": "string", // Customer-provided description
-  "images": {
-    "main": "string",      // URL of main artwork image
-    "age": "string",       // URL of age verification image
-    "signature": "string"  // URL of signature/marks image
-  }
+  "appraisals": [
+    {
+      "date": "2024-03-10",
+      "serviceType": "Standard",
+      "sessionId": "abc123",
+      "customerEmail": "customer@example.com",
+      "customerName": "John Doe",
+      "appraisalStatus": "Pending",
+      "appraisalEditLink": "https://...",
+      "imageDescription": "Vintage watch",
+      "customerDescription": "Family heirloom",
+      "appraisalValue": "$1000",
+      "appraisersDescription": "1950s Omega",
+      "finalDescription": "Mid-century timepiece",
+      "pdfLink": "https://...",
+      "docLink": "https://...",
+      "imagesJson": "{...}"
+    }
+  ],
+  "total": 1
 }
 ```
-
-### Error Responses
-
-All endpoints use the following error response format:
-
-```json
-{
-  "success": false,
-  "message": "Error description"
-}
-```
-
-**Common HTTP Status Codes:**
-- 200: Success
-- 401: Unauthorized - Missing or invalid token
-- 403: Forbidden - Valid token but insufficient permissions
-- 404: Not Found - Appraisal not found
-- 500: Internal Server Error
 
 ## Monitoring
 
@@ -323,3 +275,4 @@ If the Gmail watch is not working:
    - Missing historyId: Verify Gmail API authentication
    - Processing failures: Check OpenAI API key and quotas
    - Reply failures: Verify Gmail send permissions
+   - Appraisal status errors: Verify Data Hub API key and permissions

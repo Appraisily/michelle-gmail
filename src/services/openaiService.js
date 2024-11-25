@@ -4,7 +4,7 @@ import { recordMetric } from '../utils/monitoring.js';
 import { getSecrets } from '../utils/secretManager.js';
 import { companyKnowledge } from '../data/companyKnowledge.js';
 
-const APPRAISERS_API = 'https://appraisers-backend-856401495068.us-central1.run.app';
+const DATA_HUB_API = 'https://data-hub-856401495068.us-central1.run.app';
 let openaiClient = null;
 
 async function getOpenAIClient() {
@@ -17,80 +17,45 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function ensureSharedSecret() {
+async function getDataHubApiKey() {
   const secrets = await getSecrets();
-  if (!secrets.SHARED_SECRET) {
-    throw new Error('SHARED_SECRET not found');
+  if (!secrets.DATA_HUB_API_KEY) {
+    throw new Error('DATA_HUB_API_KEY not found');
   }
-  return secrets.SHARED_SECRET;
+  return secrets.DATA_HUB_API_KEY;
 }
 
-async function makeApiRequest(endpoint, method = 'GET', body = null) {
+async function checkAppraisalStatus(senderEmail) {
   try {
-    const secret = await ensureSharedSecret();
-
+    const apiKey = await getDataHubApiKey();
+    
     const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `SharedSecret ${secret}`
+      'X-API-Key': apiKey,
+      'Content-Type': 'application/json'
     };
 
-    const options = {
-      method,
-      headers,
-      ...(body && { body: JSON.stringify(body) })
-    };
-
-    logger.info(`Making API request to ${endpoint}`, { 
-      method,
-      headers: {
-        ...headers,
-        'Authorization': '[REDACTED]'
-      }
+    logger.info('Fetching appraisal status', { 
+      email: senderEmail,
+      endpoint: `${DATA_HUB_API}/api/appraisals/pending`
     });
 
-    const response = await fetch(`${APPRAISERS_API}/api${endpoint}`, options);
+    const response = await fetch(
+      `${DATA_HUB_API}/api/appraisals/pending?email=${encodeURIComponent(senderEmail)}`,
+      { headers }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`API request failed: ${response.status} - ${errorText}`);
     }
 
-    return response.json();
-  } catch (error) {
-    logger.error('API request failed:', {
-      endpoint,
-      error: error.message,
-      stack: error.stack
-    });
-    throw error;
-  }
-}
-
-async function checkAppraisalStatus(senderEmail) {
-  try {
-    // Get both pending and completed appraisals
-    const [pending, completed] = await Promise.all([
-      makeApiRequest('/appraisals'),
-      makeApiRequest('/appraisals/completed')
-    ]);
-
-    // Filter appraisals for the sender's email
-    const pendingForSender = pending.filter(a => a.customerEmail === senderEmail);
-    const completedForSender = completed.filter(a => a.customerEmail === senderEmail);
-
-    // Get details for the most recent pending appraisal if any
-    let latestDetails = null;
-    if (pendingForSender.length > 0) {
-      const latest = pendingForSender[0];
-      latestDetails = await makeApiRequest(`/appraisals/${latest.id}/list`);
-    }
-
+    const data = await response.json();
+    
     return {
-      hasPending: pendingForSender.length > 0,
-      hasCompleted: completedForSender.length > 0,
-      pendingCount: pendingForSender.length,
-      completedCount: completedForSender.length,
-      latestAppraisal: latestDetails
+      hasPending: data.appraisals.length > 0,
+      pendingCount: data.appraisals.length,
+      latestAppraisal: data.appraisals[0] || null,
+      total: data.total
     };
   } catch (error) {
     logger.error('Error checking appraisal status:', {

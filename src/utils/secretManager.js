@@ -12,7 +12,7 @@ export async function getSecrets() {
       'GMAIL_REFRESH_TOKEN',
       'OPENAI_API_KEY',
       'MICHELLE_CHAT_LOG_SPREADSHEETID',
-      'SHARED_SECRET'  // Added SHARED_SECRET to the list
+      'DATA_HUB_API_KEY'
     ];
 
     for (const secretName of secretNames) {
@@ -39,7 +39,7 @@ export async function getSecrets() {
       'GMAIL_REFRESH_TOKEN',
       'OPENAI_API_KEY',
       'MICHELLE_CHAT_LOG_SPREADSHEETID',
-      'SHARED_SECRET'
+      'DATA_HUB_API_KEY'
     ];
 
     const missingSecrets = requiredSecrets.filter(name => !secrets[name]);
