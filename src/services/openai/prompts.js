@@ -1,3 +1,6 @@
+import { analysisPrompts } from './prompts/analysis.js';
+import { responsePrompts } from './prompts/response.js';
+
 export const systemPrompts = {
   analysis: (companyKnowledge, apiInfo) => `
 You are Michelle Thompson, an expert customer service representative for Appraisily.
@@ -24,5 +27,9 @@ Consider the full email thread context when available.
 Use the company knowledge base: ${JSON.stringify(companyKnowledge)}
 `.trim(),
 
-  // ... rest of the prompts remain the same
+  response: (responseType, urgency, companyKnowledge) => [
+    responsePrompts.base(responseType, urgency, companyKnowledge),
+    responsePrompts.appraisalStatus,
+    responsePrompts.salesInformation
+  ].join('\n\n')
 };

@@ -1,4 +1,21 @@
-// Update the fetchEndpoints function to better handle the response structure
+import fetch from 'node-fetch';
+import { logger } from '../../utils/logger.js';
+import { getSecrets } from '../../utils/secretManager.js';
+
+const DATA_HUB_API = 'https://data-hub-856401495068.us-central1.run.app';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+let endpointsCache = null;
+let lastEndpointsFetch = null;
+
+async function getApiKey() {
+  const secrets = await getSecrets();
+  if (!secrets.DATA_HUB_API_KEY) {
+    throw new Error('DATA_HUB_API_KEY not found');
+  }
+  return secrets.DATA_HUB_API_KEY;
+}
+
 async function fetchEndpoints() {
   try {
     // Use cache if available and not expired
@@ -14,40 +31,70 @@ async function fetchEndpoints() {
 
     const data = await response.json();
     
-    // Extract endpoints array and API info
-    const { endpoints = [], authentication, rateLimiting } = data;
-    
-    if (!Array.isArray(endpoints)) {
-      throw new Error('Invalid endpoints format: expected array');
-    }
-
-    // Cache both endpoints and API info
-    endpointsCache = {
-      endpoints,
-      authentication,
-      rateLimiting
-    };
-    
+    // Cache the response
+    endpointsCache = data;
     lastEndpointsFetch = Date.now();
 
     logger.info('Fetched Data Hub endpoints', {
-      count: endpoints.length,
-      paths: endpoints.map(e => e.path),
-      authType: authentication?.type,
-      rateLimit: rateLimiting?.requestsPerWindow
+      endpointCount: data.endpoints?.length,
+      authentication: data.authentication?.type,
+      rateLimiting: data.rateLimiting?.requestsPerWindow
     });
 
-    return endpointsCache;
+    return data;
   } catch (error) {
-    logger.error('Error fetching API endpoints:', {
-      error: error.message,
-      stack: error.stack
-    });
-    // Return empty structure instead of throwing
-    return {
-      endpoints: [],
-      authentication: null,
-      rateLimiting: null
-    };
+    logger.error('Error fetching API endpoints:', error);
+    throw error;
   }
 }
+
+async function makeRequest(endpoint, method = 'GET', params = null, body = null) {
+  try {
+    const apiKey = await getApiKey();
+    
+    const headers = {
+      'X-API-Key': apiKey,
+      'Content-Type': 'application/json'
+    };
+
+    // Build URL with query parameters
+    const url = new URL(`${DATA_HUB_API}${endpoint}`);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== null && value !== undefined) {
+          url.searchParams.append(key, value);
+        }
+      });
+    }
+
+    const options = {
+      method,
+      headers,
+      ...(body && { body: JSON.stringify(body) })
+    };
+
+    logger.info('Making Data Hub API request', {
+      endpoint,
+      method,
+      params,
+      hasBody: !!body
+    });
+
+    const response = await fetch(url.toString(), options);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API request failed: ${response.status} - ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    logger.error('Data Hub API request failed:', error);
+    throw error;
+  }
+}
+
+export const dataHubClient = {
+  fetchEndpoints,
+  makeRequest
+};
