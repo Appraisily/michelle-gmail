@@ -31,7 +31,6 @@ async function handleFunctionCall(functionCall, senderEmail) {
 
     if (name === 'makeDataHubRequest') {
       const { endpoint, method, params } = parsedArgs;
-      // Add email to params if not provided
       const finalParams = {
         ...params,
         email: params?.email || senderEmail
@@ -47,6 +46,44 @@ async function handleFunctionCall(functionCall, senderEmail) {
   }
 }
 
+function parseOpenAIResponse(response) {
+  try {
+    if (!response.choices?.[0]?.message?.content) {
+      return {
+        requiresReply: true,
+        intent: "unknown",
+        urgency: "medium",
+        reason: "Unable to parse analysis",
+        suggestedResponseType: "detailed"
+      };
+    }
+
+    // Try to parse as JSON first
+    try {
+      return JSON.parse(response.choices[0].message.content);
+    } catch (e) {
+      // If not JSON, create a structured response
+      const content = response.choices[0].message.content;
+      return {
+        requiresReply: content.toLowerCase().includes('requires reply') || content.toLowerCase().includes('needs response'),
+        intent: "unknown",
+        urgency: "medium",
+        reason: content.slice(0, 200), // First 200 chars as reason
+        suggestedResponseType: "detailed"
+      };
+    }
+  } catch (error) {
+    logger.error('Error parsing OpenAI response:', error);
+    return {
+      requiresReply: true,
+      intent: "unknown",
+      urgency: "medium",
+      reason: "Error parsing response",
+      suggestedResponseType: "detailed"
+    };
+  }
+}
+
 export async function classifyAndProcessEmail(emailContent, senderEmail, threadMessages = null) {
   try {
     logger.info('Starting email classification process', {
@@ -57,7 +94,7 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
 
     const openai = await getOpenAIClient();
     
-    // First, get available endpoints
+    // Get available endpoints
     const apiInfo = await dataHubClient.fetchEndpoints();
     
     // Format thread context if available
@@ -94,15 +131,7 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     }
 
     // Get the analysis result
-    const analysis = analysisResponse.choices[0].message.content
-      ? JSON.parse(analysisResponse.choices[0].message.content)
-      : {
-          requiresReply: true,
-          intent: "unknown",
-          urgency: "medium",
-          reason: "Unable to parse analysis",
-          suggestedResponseType: "detailed"
-        };
+    const analysis = parseOpenAIResponse(analysisResponse);
 
     recordMetric('email_classifications', 1);
     logger.info('Email analysis completed', {
