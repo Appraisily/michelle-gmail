@@ -5,6 +5,7 @@ import { classifyAndProcessEmail } from './openai/index.js';
 import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
+let lastHistoryId = null;
 
 async function getGmailAuth() {
   const secrets = await getSecrets();
@@ -19,6 +20,23 @@ async function getGmailAuth() {
   });
 
   return auth;
+}
+
+async function initializeHistoryId(auth) {
+  try {
+    const profile = await gmail.users.getProfile({
+      auth,
+      userId: 'me'
+    });
+    
+    lastHistoryId = profile.data.historyId;
+    logger.info('Initialized history ID', { historyId: lastHistoryId });
+    
+    return lastHistoryId;
+  } catch (error) {
+    logger.error('Failed to initialize history ID:', error);
+    throw error;
+  }
 }
 
 async function getThreadMessages(auth, threadId) {
@@ -153,10 +171,15 @@ export async function handleWebhook(data) {
       throw new Error('No historyId in notification');
     }
 
+    // Initialize lastHistoryId if not set
+    if (!lastHistoryId) {
+      await initializeHistoryId(auth);
+    }
+
     const history = await gmail.users.history.list({
       auth,
       userId: 'me',
-      startHistoryId: decodedData.historyId
+      startHistoryId: lastHistoryId
     });
 
     if (!history.data.history) {
@@ -174,8 +197,58 @@ export async function handleWebhook(data) {
       await Promise.all(processPromises);
     }
 
+    // Update lastHistoryId after successful processing
+    lastHistoryId = decodedData.historyId;
+    logger.info('Updated history ID', { historyId: lastHistoryId });
+
   } catch (error) {
     logger.error('Webhook processing failed:', error);
+    throw error;
+  }
+}
+
+export async function sendEmail(to, subject, body, threadId = null) {
+  try {
+    const auth = await getGmailAuth();
+    
+    // Create email content
+    const email = [
+      'Content-Type: text/html; charset=utf-8',
+      'MIME-Version: 1.0',
+      `To: ${to}`,
+      'From: Michelle Thompson <info@appraisily.com>',
+      `Subject: ${subject}`,
+      '',
+      body
+    ].join('\n');
+
+    const encodedEmail = Buffer.from(email).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
+
+    const params = {
+      auth,
+      userId: 'me',
+      requestBody: {
+        raw: encodedEmail,
+        ...(threadId && { threadId })
+      }
+    };
+
+    const result = await gmail.users.messages.send(params);
+
+    logger.info('Email sent successfully', {
+      to,
+      subject,
+      messageId: result.data.id,
+      threadId: result.data.threadId
+    });
+
+    return {
+      success: true,
+      messageId: result.data.id,
+      threadId: result.data.threadId
+    };
+  } catch (error) {
+    logger.error('Failed to send email:', error);
     throw error;
   }
 }
