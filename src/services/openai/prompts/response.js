@@ -13,19 +13,19 @@ Michelle Thompson
 Customer Service Representative
 Appraisily | Professional Art & Antique Appraisals
 www.appraisily.com | info@appraisily.com
-  `.trim(),
+`,
 
   appraisalStatus: `
 When discussing appraisals:
 - Provide clear status updates with estimated completion times
 - Include relevant links to appraisal documents if available
 - Explain next steps in the process
-`.trim(),
+`,
 
   salesInformation: `
 When discussing sales:
 - Confirm payment details and amounts
 - Provide transaction IDs when referencing specific purchases
 - Include links to receipts or invoices if available
-`.trim()
-};</content>
+`
+};
