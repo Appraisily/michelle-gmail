@@ -8,23 +8,30 @@ This service automatically processes incoming emails using Gmail API watch notif
 ├── src/
 │   ├── server.js              # Main application entry point
 │   ├── services/
-│   │   ├── gmailService.js    # Gmail API integration and watch management
-│   │   ├── openaiService.js   # OpenAI integration for email processing
-│   │   └── sheetsService.js   # Google Sheets logging integration
+│   │   ├── dataHub/          # Data Hub API integration
+│   │   │   ├── client.js     # API client implementation
+│   │   │   ├── types.js      # TypeScript-like type definitions
+│   │   │   └── index.js      # Main export file
+│   │   ├── openai/           # OpenAI integration
+│   │   │   ├── functions.js  # Function definitions
+│   │   │   ├── prompts.js    # System prompts
+│   │   │   └── index.js      # Main processing logic
+│   │   ├── gmailService.js   # Gmail API integration
+│   │   └── sheetsService.js  # Google Sheets logging
 │   └── utils/
-│       ├── logger.js          # Centralized logging configuration
-│       ├── monitoring.js      # Cloud Monitoring metrics setup
-│       └── secretManager.js   # Secret Manager integration
-├── Dockerfile                 # Container configuration
-├── cloudbuild.yaml           # Cloud Build deployment configuration
-├── package.json              # Project dependencies and scripts
-└── README.md                 # Project documentation
+│       ├── logger.js         # Centralized logging
+│       ├── monitoring.js     # Cloud Monitoring metrics
+│       └── secretManager.js  # Secret Manager integration
+├── Dockerfile                # Container configuration
+├── cloudbuild.yaml          # Cloud Build deployment
+├── package.json             # Project dependencies
+└── README.md                # Project documentation
 ```
 
 ## Service Requirements
 
 1. **Gmail Watch Management**
-   - Initial watch setup required during service startup
+   - Initial watch setup during service startup
    - Watch expires after 7 days
    - Automatic renewal via cron job every 6 days
    - Only one active watch allowed per Gmail account
@@ -33,8 +40,8 @@ This service automatically processes incoming emails using Gmail API watch notif
    - Gmail OAuth2 credentials
    - Service account with appropriate permissions
    - OpenAI API key for email processing
-   - Data Hub API key for appraisal status checks
    - Google Sheets access for logging
+   - Data Hub API key for appraisal data
 
 3. **Runtime Requirements**
    - Node.js v20 or higher
@@ -50,20 +57,12 @@ This service automatically processes incoming emails using Gmail API watch notif
    - When changes occur, Gmail sends notifications to a Pub/Sub topic
 
 2. **Notification Process**
-   - Gmail → Pub/Sub notification (contains historyId)
-   - Webhook receives notification
-   - Service fetches changes using historyId
-   - Full email content retrieved
-   - Email processed and classified
-   - Automatic response generated if needed
-
-3. **Technical Flow Details**
    ```
    Gmail Inbox
      ↓
    Gmail Watch API
      ↓
-   Pub/Sub Topic (historyId only)
+   Pub/Sub Topic (historyId)
      ↓
    Webhook
      ↓
@@ -75,85 +74,193 @@ This service automatically processes incoming emails using Gmail API watch notif
      ↓
    Data Hub API (appraisal status)
      ↓
-   Gmail API (send reply)
+   OpenAI (response generation)
      ↓
    Google Sheets (logging)
    ```
 
+## API Endpoints
+
+### POST /api/gmail/webhook
+Receives Gmail notifications via Pub/Sub push subscription.
+
+**Request Body**: Pub/Sub message format
+```json
+{
+  "message": {
+    "data": "base64-encoded-data",
+    "attributes": {},
+    "messageId": "message-id",
+    "publishTime": "publish-time"
+  },
+  "subscription": "subscription-name"
+}
+```
+
+### POST /api/email/send
+Sends emails through Gmail API.
+
+**Authentication Required**: Yes (API Key)
+
+**Headers**:
+```
+X-API-Key: your_api_key_here
+```
+
+**Request Body**:
+```json
+{
+  "to": "recipient@example.com",
+  "subject": "Email Subject",
+  "body": "Email content in HTML format",
+  "threadId": "optional-gmail-thread-id"
+}
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "messageId": "message-id",
+  "threadId": "thread-id"
+}
+```
+
+## Google Sheets Logging
+
+The service automatically logs all email processing activities to a Google Sheets document for monitoring and review.
+
+### Sheet Structure
+
+The service maintains a "Logs" sheet with the following columns:
+
+1. **Timestamp**: Date and time of processing (EST)
+2. **Sender**: Email sender's address
+3. **Subject**: Email subject line
+4. **Requires Reply**: Whether the email needed a response (Yes/No)
+5. **Reason**: Analysis explanation
+6. **Intent**: Classified email intent (question/request/information/followup/other)
+7. **Urgency**: Classified urgency level (high/medium/low)
+8. **Response Type**: Suggested response type (detailed/brief/confirmation/none)
+9. **Tone**: Response tone used (formal/friendly/neutral)
+10. **Reply**: Generated response or "No reply needed"
+
+### Log Entry Example
+
+```
+Timestamp: 11/25/2024, 6:36:11 AM
+Sender: customer@example.com
+Subject: Appraisal Status Inquiry
+Requires Reply: Yes
+Reason: Customer requesting status update on pending appraisal
+Intent: followup
+Urgency: medium
+Response Type: detailed
+Tone: friendly
+Reply: [Full response text]
+```
+
+### Sheet Initialization
+
+The service automatically:
+1. Creates the "Logs" sheet if it doesn't exist
+2. Adds headers if it's a new sheet
+3. Appends new logs to the next available row
+
+### Access Requirements
+
+The service account needs the following permissions:
+- Google Sheets API access
+- Write permissions to the specified spreadsheet
+
+### Configuration
+
+1. Create a Google Sheet and share it with the service account email
+2. Add the Sheet ID to Secret Manager:
+   ```bash
+   echo -n "your-sheet-id" | gcloud secrets versions add MICHELLE_CHAT_LOG_SPREADSHEETID --data-file=-
+   ```
+
+### Viewing Logs
+
+1. Access the Google Sheet using the provided ID
+2. The most recent entries appear at the bottom
+3. Use Google Sheets' filtering and sorting features to analyze logs
+
 ## Required Permissions
 
-### 1. Service Account Permissions
-Run these commands to grant necessary permissions to your service account:
+### Service Account Permissions
+Run these commands to grant necessary permissions:
 
 ```bash
 # Set environment variables
-export PROJECT_ID=civil-forge-403609
-export SERVICE_ACCOUNT=856401495068-compute@developer.gserviceaccount.com
+export PROJECT_ID=your-project-id
+export SERVICE_ACCOUNT=your-service-account@your-project.iam.gserviceaccount.com
 
 # Grant Pub/Sub Publisher permissions to Gmail service
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:gmail-api-push@system.gserviceaccount.com" \
     --role="roles/pubsub.publisher"
 
-# Grant Pub/Sub Subscriber permissions to your service account
+# Grant Pub/Sub Subscriber permissions
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:$SERVICE_ACCOUNT" \
     --role="roles/pubsub.subscriber"
 
-# Grant Secret Manager access to your service account
+# Grant Secret Manager access
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:$SERVICE_ACCOUNT" \
     --role="roles/secretmanager.secretAccessor"
 ```
 
-### 2. Gmail API Scope Requirements
-Ensure your OAuth consent screen includes these scopes:
+### Gmail API Scopes
+Required OAuth consent screen scopes:
 - `https://www.googleapis.com/auth/gmail.modify`
 - `https://www.googleapis.com/auth/gmail.settings.basic`
 - `https://www.googleapis.com/auth/gmail.readonly`
 
 ## Environment Variables
 
-The following environment variables are required:
+Required environment variables:
 
-### Core Environment Variables
 ```
-PROJECT_ID=your-gcp-project-id                    # Your Google Cloud Project ID
-GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id       # Alternative Project ID variable
-PUBSUB_TOPIC=gmail-notifications-michelle         # The Pub/Sub topic name for Gmail notifications
-PUBSUB_SUBSCRIPTION=gmail-notifications-sub-michelle  # The Pub/Sub subscription name
-GMAIL_USER_EMAIL=info@appraisily.com             # The Gmail address being monitored
-NODE_ENV=production                               # Environment mode (production/development)
+PROJECT_ID=your-gcp-project-id
+GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id
+PUBSUB_TOPIC=gmail-notifications
+PUBSUB_SUBSCRIPTION=gmail-notifications-sub
+GMAIL_USER_EMAIL=info@appraisily.com
+NODE_ENV=production
 ```
 
-### Required Secrets
-Configure these secrets in Google Cloud Secret Manager:
+## Required Secrets
+
+Configure these in Google Cloud Secret Manager:
 
 ```
 GMAIL_CLIENT_ID          # Gmail OAuth Client ID
 GMAIL_CLIENT_SECRET      # Gmail OAuth Client Secret
 GMAIL_REFRESH_TOKEN      # Gmail OAuth Refresh Token
-OPENAI_API_KEY          # OpenAI API Key for email classification
-MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID for logging
-DATA_HUB_API_KEY        # API Key for Data Hub backend access
+OPENAI_API_KEY          # OpenAI API Key
+MICHELLE_CHAT_LOG_SPREADSHEETID  # Google Sheets ID
+DATA_HUB_API_KEY        # Data Hub API Key
 ```
 
 ## Setup Instructions
 
-1. Create a Pub/Sub topic and subscription:
+1. Create Pub/Sub infrastructure:
    ```bash
-   # Create the topic
-   gcloud pubsub topics create gmail-notifications-michelle
+   # Create topic
+   gcloud pubsub topics create gmail-notifications
 
-   # Create the subscription
-   gcloud pubsub subscriptions create gmail-notifications-sub-michelle \
-       --topic gmail-notifications-michelle \
-       --push-endpoint=https://michelle-gmail-856401495068.us-central1.run.app/api/gmail/webhook \
+   # Create subscription
+   gcloud pubsub subscriptions create gmail-notifications-sub \
+       --topic gmail-notifications \
+       --push-endpoint=https://your-service-url/api/gmail/webhook \
        --ack-deadline=60 \
        --message-retention-duration=1d
    ```
 
-2. Configure secrets in Secret Manager:
+2. Configure secrets:
    ```bash
    # Create secrets
    gcloud secrets create GMAIL_CLIENT_ID --replication-policy="automatic"
@@ -163,7 +270,7 @@ DATA_HUB_API_KEY        # API Key for Data Hub backend access
    gcloud secrets create MICHELLE_CHAT_LOG_SPREADSHEETID --replication-policy="automatic"
    gcloud secrets create DATA_HUB_API_KEY --replication-policy="automatic"
 
-   # Add secret versions (replace with actual values)
+   # Add secret versions
    echo -n "your-client-id" | gcloud secrets versions add GMAIL_CLIENT_ID --data-file=-
    echo -n "your-client-secret" | gcloud secrets versions add GMAIL_CLIENT_SECRET --data-file=-
    echo -n "your-refresh-token" | gcloud secrets versions add GMAIL_REFRESH_TOKEN --data-file=-
@@ -177,62 +284,9 @@ DATA_HUB_API_KEY        # API Key for Data Hub backend access
    gcloud builds submit
    ```
 
-## Architecture
-
-- **Gmail Watch**: Monitors inbox for new emails
-- **Pub/Sub**: Handles Gmail notifications
-- **OpenAI**: Classifies emails and generates responses
-- **Data Hub API**: Provides appraisal status information
-- **Google Sheets**: Logs all email processing activities
-- **Cloud Run**: Hosts the service
-- **Secret Manager**: Securely stores credentials
-
-## Data Hub API Integration
-
-The service integrates with the Data Hub API to retrieve appraisal information:
-
-### Endpoint
-```
-GET https://data-hub-856401495068.us-central1.run.app/api/appraisals/pending
-```
-
-### Authentication
-```
-X-API-Key: [DATA_HUB_API_KEY]
-```
-
-### Query Parameters
-- `email`: Filter appraisals by customer email
-
-### Response Format
-```json
-{
-  "appraisals": [
-    {
-      "date": "2024-03-10",
-      "serviceType": "Standard",
-      "sessionId": "abc123",
-      "customerEmail": "customer@example.com",
-      "customerName": "John Doe",
-      "appraisalStatus": "Pending",
-      "appraisalEditLink": "https://...",
-      "imageDescription": "Vintage watch",
-      "customerDescription": "Family heirloom",
-      "appraisalValue": "$1000",
-      "appraisersDescription": "1950s Omega",
-      "finalDescription": "Mid-century timepiece",
-      "pdfLink": "https://...",
-      "docLink": "https://...",
-      "imagesJson": "{...}"
-    }
-  ],
-  "total": 1
-}
-```
-
 ## Monitoring
 
-The service includes built-in monitoring using Cloud Monitoring:
+The service includes built-in monitoring:
 - Email processing metrics
 - Classification results
 - Reply generation statistics
@@ -240,7 +294,7 @@ The service includes built-in monitoring using Cloud Monitoring:
 
 ## Logging
 
-Logs are available in Cloud Run logs with the following severity levels:
+Logs are available in Cloud Run logs with these severity levels:
 - ERROR: Critical failures requiring immediate attention
 - WARNING: Important issues that don't stop service operation
 - INFO: Normal operational events
@@ -248,31 +302,29 @@ Logs are available in Cloud Run logs with the following severity levels:
 
 ## Troubleshooting
 
-If the Gmail watch is not working:
+If Gmail watch is not working:
 
-1. Verify Pub/Sub permissions:
+1. Check Pub/Sub permissions:
    ```bash
-   # Check if Gmail service can publish to Pub/Sub
-   gcloud pubsub topics get-iam-policy gmail-notifications-michelle
+   gcloud pubsub topics get-iam-policy gmail-notifications
    ```
 
 2. Verify service account permissions:
    ```bash
-   # Check service account roles
    gcloud projects get-iam-policy $PROJECT_ID \
        --flatten="bindings[].members" \
        --format='table(bindings.role)' \
        --filter="bindings.members:$SERVICE_ACCOUNT"
    ```
 
-3. Check Cloud Run logs for specific error messages:
+3. Check Cloud Run logs:
    ```bash
-   gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=michelle-gmail" --limit=50
+   gcloud logging read "resource.type=cloud_run_revision" --limit=50
    ```
 
-4. Common Issues:
-   - Empty notifications: Check Gmail Watch setup and permissions
-   - Missing historyId: Verify Gmail API authentication
-   - Processing failures: Check OpenAI API key and quotas
-   - Reply failures: Verify Gmail send permissions
-   - Appraisal status errors: Verify Data Hub API key and permissions
+Common issues:
+- Empty notifications: Check Gmail Watch setup
+- Missing historyId: Verify Gmail API authentication
+- Processing failures: Check OpenAI API key and quotas
+- Reply failures: Verify Gmail send permissions
+- Data Hub API errors: Verify API key and permissions

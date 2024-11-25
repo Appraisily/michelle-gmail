@@ -67,9 +67,29 @@ async function checkAppraisalStatus(senderEmail) {
   }
 }
 
-export async function classifyAndProcessEmail(emailContent, senderEmail) {
+function formatThreadForPrompt(threadMessages) {
+  if (!threadMessages || threadMessages.length === 0) {
+    return '';
+  }
+
+  return threadMessages
+    .map(msg => {
+      const role = msg.isIncoming ? 'Customer' : 'Appraisily';
+      const date = new Date(msg.date).toLocaleString();
+      return `[${date}] ${role}:\n${msg.content.trim()}\n`;
+    })
+    .join('\n---\n\n');
+}
+
+export async function classifyAndProcessEmail(emailContent, senderEmail, threadMessages = null) {
   try {
     const openai = await getOpenAIClient();
+    
+    // Format thread context if available
+    const threadContext = formatThreadForPrompt(threadMessages);
+    const fullContext = threadContext 
+      ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
+      : emailContent;
     
     // First, analyze the email
     const analysisResponse = await openai.chat.completions.create({
@@ -80,11 +100,12 @@ export async function classifyAndProcessEmail(emailContent, senderEmail) {
           content: `You are Michelle Thompson, an expert customer service representative for Appraisily, a leading art and antique appraisal firm. 
                    Analyze emails to determine their intent, urgency, and whether they require a response. 
                    Pay special attention to mentions of appraisals, artwork, or status inquiries.
+                   Consider the full email thread context when available to provide more accurate responses.
                    Use the company knowledge base to provide accurate information: ${JSON.stringify(companyKnowledge)}`
         },
         {
           role: "user",
-          content: `Analyze this email thoroughly:\n\n${emailContent}`
+          content: `Analyze this email thoroughly:\n\n${fullContext}`
         }
       ],
       functions: [{
@@ -160,11 +181,12 @@ export async function classifyAndProcessEmail(emailContent, senderEmail) {
           role: "system",
           content: `You are Michelle Thompson, a professional customer service representative for Appraisily. 
                    Generate ${analysis.suggestedResponseType} responses while maintaining a ${analysis.urgency === 'high' ? 'prompt and' : ''} professional tone.
+                   Consider the full email thread context when crafting your response.
                    Use the company knowledge base for accurate information: ${JSON.stringify(companyKnowledge)}`
         },
         {
           role: "user",
-          content: `Original email:\n${emailContent}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nAppraisal Status: ${JSON.stringify(appraisalStatus)}\n\nGenerate an appropriate response.`
+          content: `Full email thread:\n${fullContext}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nAppraisal Status: ${JSON.stringify(appraisalStatus)}\n\nGenerate an appropriate response.`
         }
       ],
       functions: [{

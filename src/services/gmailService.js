@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
-import { classifyAndProcessEmail } from './openaiService.js';
+import { classifyAndProcessEmail } from './openai/index.js';
 import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
@@ -44,12 +44,44 @@ function getEmailDetails(message) {
   const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
   const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown Sender';
   const content = parseEmailContent(message.payload);
+  const threadId = message.threadId;
   
   // Extract email address from the "from" field
   const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
   const senderEmail = emailMatch[1];
   
-  return { subject, from, content, senderEmail };
+  return { subject, from, content, senderEmail, threadId };
+}
+
+async function getThreadMessages(auth, threadId) {
+  try {
+    const thread = await gmail.users.threads.get({
+      auth,
+      userId: 'me',
+      id: threadId,
+      format: 'full'
+    });
+
+    return thread.data.messages.map(message => {
+      const { from, content } = getEmailDetails(message);
+      const timestamp = parseInt(message.internalDate);
+      const date = new Date(timestamp).toISOString();
+      
+      return {
+        from,
+        content,
+        date,
+        isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
+      };
+    });
+  } catch (error) {
+    logger.error('Error fetching thread:', {
+      threadId,
+      error: error.message,
+      stack: error.stack
+    });
+    return null;
+  }
 }
 
 async function processMessage(auth, messageId) {
@@ -61,16 +93,24 @@ async function processMessage(auth, messageId) {
       format: 'full'
     });
 
-    const { subject, from, content, senderEmail } = getEmailDetails(fullMessage.data);
+    const { subject, from, content, senderEmail, threadId } = getEmailDetails(fullMessage.data);
+    
+    // Get the entire email thread
+    const threadMessages = await getThreadMessages(auth, threadId);
     
     logger.info('Processing email', {
       id: fullMessage.data.id,
       subject,
-      from
+      from,
+      threadMessagesCount: threadMessages?.length || 0
     });
 
-    // Process with OpenAI
-    const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(content, senderEmail);
+    // Process with OpenAI, including thread context
+    const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(
+      content,
+      senderEmail,
+      threadMessages
+    );
 
     // Log to Google Sheets
     await logEmailProcessing({
@@ -80,7 +120,8 @@ async function processMessage(auth, messageId) {
       requiresReply,
       reply: generatedReply || 'No reply needed',
       reason,
-      appraisalStatus
+      appraisalStatus,
+      threadMessagesCount: threadMessages?.length || 0
     });
 
     logger.info('Email processed', {
@@ -88,7 +129,8 @@ async function processMessage(auth, messageId) {
       requiresReply,
       hasReply: !!generatedReply,
       reason,
-      hasAppraisalStatus: !!appraisalStatus
+      hasAppraisalStatus: !!appraisalStatus,
+      threadMessagesCount: threadMessages?.length || 0
     });
 
     return true;
@@ -97,6 +139,66 @@ async function processMessage(auth, messageId) {
       logger.warn('Message not found, skipping', { messageId });
       return false;
     }
+    throw error;
+  }
+}
+
+export async function sendEmail(to, subject, body, threadId = null) {
+  try {
+    const auth = await getGmailAuth();
+
+    // Create email content
+    const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+    const messageParts = [
+      'From: Michelle Thompson <info@appraisily.com>',
+      `To: ${to}`,
+      'Content-Type: text/html; charset=utf-8',
+      'MIME-Version: 1.0',
+      `Subject: ${utf8Subject}`,
+      '',
+      body
+    ];
+    const message = messageParts.join('\n');
+
+    // Encode the message
+    const encodedMessage = Buffer.from(message)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    // Prepare the API request
+    const request = {
+      auth,
+      userId: 'me',
+      resource: {
+        raw: encodedMessage,
+        ...(threadId && { threadId })
+      }
+    };
+
+    // Send the email
+    const response = await gmail.users.messages.send(request);
+
+    logger.info('Email sent successfully', {
+      messageId: response.data.id,
+      threadId: response.data.threadId,
+      to,
+      subject
+    });
+
+    return {
+      success: true,
+      messageId: response.data.id,
+      threadId: response.data.threadId
+    };
+  } catch (error) {
+    logger.error('Error sending email:', {
+      error: error.message,
+      stack: error.stack,
+      to,
+      subject
+    });
     throw error;
   }
 }
