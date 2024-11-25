@@ -6,6 +6,7 @@ import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
 let lastHistoryId = null;
+const processedMessages = new Set(); // Track processed message IDs
 
 async function getGmailAuth() {
   const secrets = await getSecrets();
@@ -96,6 +97,12 @@ function parseEmailContent(payload) {
 }
 
 async function processMessage(auth, messageId) {
+  // Skip if message was already processed
+  if (processedMessages.has(messageId)) {
+    logger.info('Skipping already processed message', { messageId });
+    return true;
+  }
+
   try {
     const message = await gmail.users.messages.get({
       auth,
@@ -133,6 +140,7 @@ async function processMessage(auth, messageId) {
         messageId,
         threadId
       });
+      processedMessages.add(messageId); // Mark as processed
       return true;
     }
 
@@ -154,6 +162,15 @@ async function processMessage(auth, messageId) {
       analysis: result.analysis,
       threadMessagesCount: threadMessages?.length || 0
     });
+
+    // Mark message as processed
+    processedMessages.add(messageId);
+
+    // Maintain a reasonable size for the Set
+    if (processedMessages.size > 1000) {
+      const oldestMessages = Array.from(processedMessages).slice(0, 500);
+      oldestMessages.forEach(id => processedMessages.delete(id));
+    }
 
     return true;
   } catch (error) {
