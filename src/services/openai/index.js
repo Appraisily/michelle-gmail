@@ -239,4 +239,4 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     recordMetric('openai_failures', 1);
     throw error;
   }
-}</content>
+}
