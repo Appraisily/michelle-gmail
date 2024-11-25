@@ -327,4 +327,4 @@ Common issues:
 - Missing historyId: Verify Gmail API authentication
 - Processing failures: Check OpenAI API key and quotas
 - Reply failures: Verify Gmail send permissions
-- Data Hub API errors: Verify API key and permissions
+- Data Hub API errors: Verify API key and permissions.
