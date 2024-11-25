@@ -2,10 +2,8 @@ import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
 import { classifyAndProcessEmail } from './openai/index.js';
-import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
-let lastHistoryId = null;
 
 async function getGmailAuth() {
   const secrets = await getSecrets();
@@ -62,18 +60,27 @@ async function getThreadMessages(auth, threadId) {
       format: 'full'
     });
 
-    return thread.data.messages.map(message => {
-      const { from, content } = getEmailDetails(message);
-      const timestamp = parseInt(message.internalDate);
-      const date = new Date(timestamp).toISOString();
-      
-      return {
-        from,
-        content,
-        date,
-        isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
-      };
+    // Sort messages by timestamp to ensure correct order
+    const messages = thread.data.messages
+      .map(message => {
+        const { from, content } = getEmailDetails(message);
+        const timestamp = parseInt(message.internalDate);
+        return {
+          from,
+          content,
+          timestamp,
+          date: new Date(timestamp).toISOString(),
+          isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
+        };
+      })
+      .sort((a, b) => a.timestamp - b.timestamp); // Sort chronologically
+
+    logger.info('Thread messages retrieved', {
+      threadId,
+      messageCount: messages.length
     });
+
+    return messages;
   } catch (error) {
     logger.error('Error fetching thread:', {
       threadId,
@@ -100,10 +107,22 @@ async function processMessage(auth, messageId) {
     
     logger.info('Processing email', {
       id: fullMessage.data.id,
-      subject,
       from,
+      subject,
       threadMessagesCount: threadMessages?.length || 0
     });
+
+    // Only process if this is the latest message in the thread
+    const isLatestMessage = threadMessages && 
+      threadMessages[threadMessages.length - 1].timestamp === parseInt(fullMessage.data.internalDate);
+
+    if (!isLatestMessage) {
+      logger.info('Skipping non-latest message in thread', {
+        messageId,
+        threadId
+      });
+      return true;
+    }
 
     // Process with OpenAI, including thread context
     const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(
@@ -128,7 +147,6 @@ async function processMessage(auth, messageId) {
       id: fullMessage.data.id,
       requiresReply,
       hasReply: !!generatedReply,
-      reason,
       hasAppraisalStatus: !!appraisalStatus,
       threadMessagesCount: threadMessages?.length || 0
     });

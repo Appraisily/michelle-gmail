@@ -4,8 +4,8 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getSecrets } from '../../utils/secretManager.js';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
 import { dataHubClient } from '../dataHub/client.js';
-import { emailAnalysisFunction, responseGenerationFunction } from './functions.js';
-import { systemPrompts } from './prompts.js';
+import { emailAnalysisFunction, responseGenerationFunction } from './functions/email.js';
+import { systemPrompts } from './prompts/index.js';
 
 let openaiClient = null;
 
@@ -19,25 +19,51 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function getCustomerData(senderEmail, context = {}) {
+async function getCustomerData(senderEmail, dataChecks = {}) {
   try {
-    const [pending, completed, sales] = await Promise.all([
-      dataHubClient.getPendingAppraisals({ 
-        email: senderEmail,
-        sessionId: context.sessionId,
-        wordpressSlug: context.wordpressSlug
-      }),
-      context.checkCompletedAppraisals ? dataHubClient.getCompletedAppraisals({ 
-        email: senderEmail,
-        sessionId: context.sessionId,
-        wordpressSlug: context.wordpressSlug
-      }) : { appraisals: [], total: 0 },
-      context.stripeCustomerId ? dataHubClient.getSales({
-        email: senderEmail,
-        sessionId: context.sessionId,
-        stripeCustomerId: context.stripeCustomerId
-      }) : { sales: [], total: 0 }
-    ]);
+    const { appraisals = {}, sales = {} } = dataChecks;
+    
+    // Prepare API calls based on required checks
+    const apiCalls = [];
+    
+    if (appraisals.checkPending) {
+      apiCalls.push(
+        dataHubClient.getPendingAppraisals({ 
+          email: senderEmail,
+          sessionId: appraisals.sessionId,
+          wordpressSlug: appraisals.wordpressSlug
+        })
+      );
+    } else {
+      apiCalls.push(Promise.resolve({ appraisals: [], total: 0 }));
+    }
+
+    if (appraisals.checkCompleted) {
+      apiCalls.push(
+        dataHubClient.getCompletedAppraisals({ 
+          email: senderEmail,
+          sessionId: appraisals.sessionId,
+          wordpressSlug: appraisals.wordpressSlug
+        })
+      );
+    } else {
+      apiCalls.push(Promise.resolve({ appraisals: [], total: 0 }));
+    }
+
+    if (sales.checkSales) {
+      apiCalls.push(
+        dataHubClient.getSales({
+          email: senderEmail,
+          sessionId: sales.sessionId,
+          stripeCustomerId: sales.stripeCustomerId
+        })
+      );
+    } else {
+      apiCalls.push(Promise.resolve({ sales: [], total: 0 }));
+    }
+
+    // Execute all API calls in parallel
+    const [pending, completed, salesData] = await Promise.all(apiCalls);
     
     return {
       appraisals: {
@@ -49,16 +75,16 @@ async function getCustomerData(senderEmail, context = {}) {
         completedAppraisals: completed.appraisals
       },
       sales: {
-        hasSales: sales.sales.length > 0,
-        totalSales: sales.total,
-        salesData: sales.sales
+        hasSales: salesData.sales?.length > 0,
+        totalSales: salesData.total,
+        salesData: salesData.sales
       }
     };
   } catch (error) {
     logger.error('Error fetching customer data:', {
       error: error.message,
       senderEmail,
-      context,
+      dataChecks,
       stack: error.stack
     });
     return null;
@@ -116,12 +142,12 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
 
     // Get customer data if needed
     let customerData = null;
-    if (analysis.appraisalCheck || analysis.salesCheck) {
+    if (analysis.dataChecks?.appraisals || analysis.dataChecks?.sales) {
       logger.info('Fetching customer data for:', { 
         senderEmail,
-        context: analysis.context 
+        dataChecks: analysis.dataChecks 
       });
-      customerData = await getCustomerData(senderEmail, analysis.context);
+      customerData = await getCustomerData(senderEmail, analysis.dataChecks);
     }
 
     if (!analysis.requiresReply) {
