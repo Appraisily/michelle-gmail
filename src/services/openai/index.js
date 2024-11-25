@@ -4,8 +4,7 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getSecrets } from '../../utils/secretManager.js';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
 import { dataHubClient } from '../dataHub/client.js';
-import { emailAnalysisFunction, responseGenerationFunction } from './functions/email.js';
-import { systemPrompts } from './prompts/index.js';
+import { systemPrompts } from './prompts.js';
 
 let openaiClient = null;
 
@@ -19,72 +18,60 @@ async function getOpenAIClient() {
   return openaiClient;
 }
 
-async function getCustomerData(senderEmail, dataChecks = {}) {
+async function getCustomerData(senderEmail) {
   try {
-    const { appraisals = {}, sales = {} } = dataChecks;
+    logger.info('Starting customer data fetch', { senderEmail });
     
-    // Prepare API calls based on required checks
+    // Get available endpoints
+    const endpoints = await dataHubClient.fetchEndpoints();
+    logger.info('Retrieved Data Hub endpoints', { 
+      count: endpoints.length,
+      paths: endpoints.map(e => e.path)
+    });
+    
+    // Prepare API calls based on available endpoints
     const apiCalls = [];
     
-    if (appraisals.checkPending) {
-      apiCalls.push(
-        dataHubClient.getPendingAppraisals({ 
-          email: senderEmail,
-          sessionId: appraisals.sessionId,
-          wordpressSlug: appraisals.wordpressSlug
-        })
-      );
-    } else {
-      apiCalls.push(Promise.resolve({ appraisals: [], total: 0 }));
-    }
-
-    if (appraisals.checkCompleted) {
-      apiCalls.push(
-        dataHubClient.getCompletedAppraisals({ 
-          email: senderEmail,
-          sessionId: appraisals.sessionId,
-          wordpressSlug: appraisals.wordpressSlug
-        })
-      );
-    } else {
-      apiCalls.push(Promise.resolve({ appraisals: [], total: 0 }));
-    }
-
-    if (sales.checkSales) {
-      apiCalls.push(
-        dataHubClient.getSales({
-          email: senderEmail,
-          sessionId: sales.sessionId,
-          stripeCustomerId: sales.stripeCustomerId
-        })
-      );
-    } else {
-      apiCalls.push(Promise.resolve({ sales: [], total: 0 }));
-    }
+    // Add calls based on available endpoints
+    endpoints.forEach(endpoint => {
+      if (endpoint.path === '/appraisals/pending' || 
+          endpoint.path === '/appraisals/completed' ||
+          endpoint.path === '/sales') {
+        apiCalls.push(
+          dataHubClient.makeRequest(
+            endpoint.path,
+            'GET',
+            { email: senderEmail }
+          )
+        );
+        logger.info('Added API call to queue', { 
+          path: endpoint.path,
+          method: 'GET',
+          params: { email: senderEmail }
+        });
+      }
+    });
 
     // Execute all API calls in parallel
-    const [pending, completed, salesData] = await Promise.all(apiCalls);
+    logger.info('Executing API calls', { count: apiCalls.length });
+    const results = await Promise.all(apiCalls);
     
+    logger.info('Customer data fetch completed', {
+      resultsCount: results.length,
+      dataPoints: results.map(r => ({
+        type: r.type,
+        count: r.total
+      }))
+    });
+
     return {
-      appraisals: {
-        hasPending: pending.appraisals.length > 0,
-        hasCompleted: completed.appraisals.length > 0,
-        pendingCount: pending.total,
-        completedCount: completed.total,
-        pendingAppraisals: pending.appraisals,
-        completedAppraisals: completed.appraisals
-      },
-      sales: {
-        hasSales: salesData.sales?.length > 0,
-        totalSales: salesData.total,
-        salesData: salesData.sales
-      }
+      endpoints,
+      data: results
     };
   } catch (error) {
     logger.error('Error fetching customer data:', {
       error: error.message,
       senderEmail,
-      dataChecks,
       stack: error.stack
     });
     return null;
@@ -96,40 +83,80 @@ function formatThreadForPrompt(threadMessages) {
     return '';
   }
 
-  return threadMessages
+  const formatted = threadMessages
     .map(msg => {
       const role = msg.isIncoming ? 'Customer' : 'Appraisily';
       const date = new Date(msg.date).toLocaleString();
       return `[${date}] ${role}:\n${msg.content.trim()}\n`;
     })
     .join('\n---\n\n');
+
+  logger.info('Formatted email thread', {
+    messageCount: threadMessages.length,
+    firstMessageDate: threadMessages[0].date,
+    lastMessageDate: threadMessages[threadMessages.length - 1].date
+  });
+
+  return formatted;
 }
 
 export async function classifyAndProcessEmail(emailContent, senderEmail, threadMessages = null) {
   try {
+    logger.info('Starting email classification process', {
+      senderEmail,
+      hasThread: !!threadMessages,
+      threadLength: threadMessages?.length
+    });
+
     const openai = await getOpenAIClient();
     
+    // Get customer data and available endpoints
+    logger.info('Fetching customer context data');
+    const { endpoints, data: customerData } = await getCustomerData(senderEmail);
+    
     // Format thread context if available
+    logger.info('Preparing email context');
     const threadContext = formatThreadForPrompt(threadMessages);
     const fullContext = threadContext 
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
     
     // First, analyze the email
+    logger.info('Starting OpenAI analysis');
     const analysisResponse = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: systemPrompts.analysis(companyKnowledge)
+          content: systemPrompts.analysis(companyKnowledge, endpoints)
         },
         {
           role: "user",
           content: `Analyze this email thoroughly:\n\n${fullContext}`
         }
       ],
-      functions: [emailAnalysisFunction],
-      function_call: { name: "analyzeEmail" },
+      functions: [{
+        name: "makeDataHubRequest",
+        description: "Makes a request to Data Hub API",
+        parameters: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+              description: "API endpoint path"
+            },
+            method: {
+              type: "string",
+              enum: ["GET", "POST", "PUT", "DELETE"]
+            },
+            params: {
+              type: "object",
+              additionalProperties: true
+            }
+          },
+          required: ["path", "method"]
+        }
+      }],
       temperature: 0.3
     });
 
@@ -138,19 +165,16 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     );
 
     recordMetric('email_classifications', 1);
-    logger.info('Email analysis completed', analysis);
-
-    // Get customer data if needed
-    let customerData = null;
-    if (analysis.dataChecks?.appraisals || analysis.dataChecks?.sales) {
-      logger.info('Fetching customer data for:', { 
-        senderEmail,
-        dataChecks: analysis.dataChecks 
-      });
-      customerData = await getCustomerData(senderEmail, analysis.dataChecks);
-    }
+    logger.info('Email analysis completed', {
+      intent: analysis.intent,
+      urgency: analysis.urgency,
+      requiresReply: analysis.requiresReply,
+      responseType: analysis.suggestedResponseType,
+      reason: analysis.reason
+    });
 
     if (!analysis.requiresReply) {
+      logger.info('No reply needed', { reason: analysis.reason });
       return {
         requiresReply: false,
         generatedReply: null,
@@ -161,6 +185,7 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     }
 
     // Generate response if needed
+    logger.info('Starting response generation');
     const responseGeneration = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
@@ -177,8 +202,6 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
           content: `Full email thread:\n${fullContext}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nCustomer Data: ${JSON.stringify(customerData)}\n\nGenerate an appropriate response.`
         }
       ],
-      functions: [responseGenerationFunction],
-      function_call: { name: "generateResponse" },
       temperature: 0.7
     });
 
@@ -187,6 +210,12 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     );
 
     recordMetric('replies_generated', 1);
+    logger.info('Response generated', {
+      tone: responseData.tone,
+      hasNextSteps: !!responseData.nextSteps,
+      responseLength: responseData.response.length,
+      metadata: responseData.metadata
+    });
 
     return {
       requiresReply: true,
@@ -198,8 +227,16 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     };
 
   } catch (error) {
-    logger.error('Error in OpenAI service:', error);
+    logger.error('Error in OpenAI service:', {
+      error: error.message,
+      stack: error.stack,
+      phase: error.phase || 'unknown',
+      context: {
+        senderEmail,
+        hasThread: !!threadMessages
+      }
+    });
     recordMetric('openai_failures', 1);
     throw error;
   }
-}
+}</content>

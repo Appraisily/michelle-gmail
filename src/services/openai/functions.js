@@ -1,89 +1,29 @@
-export const emailAnalysisFunction = {
-  name: "analyzeEmail",
-  description: "Analyzes an email to determine its intent, urgency, and required action",
+export const dataHubFunction = {
+  name: "makeDataHubRequest",
+  description: "Makes a request to Data Hub API",
   parameters: {
     type: "object",
     properties: {
-      intent: {
+      path: {
         type: "string",
-        enum: ["question", "request", "information", "followup", "other"],
-        description: "The primary intent of the email"
+        description: "API endpoint path (e.g., /appraisals/pending)"
       },
-      urgency: {
+      method: {
         type: "string",
-        enum: ["high", "medium", "low"],
-        description: "The urgency level of the email"
+        enum: ["GET", "POST", "PUT", "DELETE"],
+        description: "HTTP method"
       },
-      requiresReply: {
-        type: "boolean",
-        description: "Whether the email needs a response"
-      },
-      reason: {
-        type: "string",
-        description: "Detailed explanation of the analysis"
-      },
-      suggestedResponseType: {
-        type: "string",
-        enum: ["detailed", "brief", "confirmation", "none"],
-        description: "The recommended type of response"
-      },
-      appraisalCheck: {
-        type: "boolean",
-        description: "Whether to check appraisal status for the sender"
-      },
-      salesCheck: {
-        type: "boolean",
-        description: "Whether to check sales information for the sender"
-      },
-      context: {
+      params: {
         type: "object",
-        properties: {
-          checkCompletedAppraisals: {
-            type: "boolean",
-            description: "Whether to check completed appraisals"
-          },
-          sessionId: {
-            type: "string",
-            description: "Specific appraisal or sale session ID to check"
-          },
-          wordpressSlug: {
-            type: "string",
-            description: "WordPress URL slug to check"
-          },
-          stripeCustomerId: {
-            type: "string",
-            description: "Stripe customer ID to check"
-          }
-        }
+        description: "Query parameters",
+        additionalProperties: true
+      },
+      body: {
+        type: "object",
+        description: "Request body for POST/PUT requests",
+        additionalProperties: true
       }
     },
-    required: ["intent", "urgency", "requiresReply", "reason", "suggestedResponseType"]
-  }
-};
-
-export const responseGenerationFunction = {
-  name: "generateResponse",
-  description: "Generates an appropriate email response based on the analysis",
-  parameters: {
-    type: "object",
-    properties: {
-      response: {
-        type: "string",
-        description: "The generated email response"
-      },
-      tone: {
-        type: "string",
-        enum: ["formal", "friendly", "neutral"],
-        description: "The tone used in the response"
-      },
-      nextSteps: {
-        type: "array",
-        items: {
-          type: "string"
-        },
-        description: "Suggested follow-up actions if any"
-      }
-    },
-    required: ["response", "tone"]
+    required: ["path", "method"]
   }
 };

@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
 import { classifyAndProcessEmail } from './openai/index.js';
+import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
 
@@ -18,6 +19,45 @@ async function getGmailAuth() {
   });
 
   return auth;
+}
+
+async function getThreadMessages(auth, threadId) {
+  try {
+    const thread = await gmail.users.threads.get({
+      auth,
+      userId: 'me',
+      id: threadId,
+      format: 'full'
+    });
+
+    // Sort messages by timestamp
+    const messages = thread.data.messages
+      .map(message => {
+        const headers = message.payload.headers;
+        const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
+        const content = parseEmailContent(message.payload);
+        const timestamp = parseInt(message.internalDate);
+        
+        return {
+          from,
+          content,
+          timestamp,
+          date: new Date(timestamp).toISOString(),
+          isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
+        };
+      })
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    logger.info('Thread messages retrieved', {
+      threadId,
+      messageCount: messages.length
+    });
+
+    return messages;
+  } catch (error) {
+    logger.error('Error fetching thread:', error);
+    return null;
+  }
 }
 
 function parseEmailContent(payload) {
@@ -37,84 +77,38 @@ function parseEmailContent(payload) {
   return content;
 }
 
-function getEmailDetails(message) {
-  const headers = message.payload.headers;
-  const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || 'No Subject';
-  const from = headers.find(h => h.name.toLowerCase() === 'from')?.value || 'Unknown Sender';
-  const content = parseEmailContent(message.payload);
-  const threadId = message.threadId;
-  
-  // Extract email address from the "from" field
-  const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
-  const senderEmail = emailMatch[1];
-  
-  return { subject, from, content, senderEmail, threadId };
-}
-
-async function getThreadMessages(auth, threadId) {
-  try {
-    const thread = await gmail.users.threads.get({
-      auth,
-      userId: 'me',
-      id: threadId,
-      format: 'full'
-    });
-
-    // Sort messages by timestamp to ensure correct order
-    const messages = thread.data.messages
-      .map(message => {
-        const { from, content } = getEmailDetails(message);
-        const timestamp = parseInt(message.internalDate);
-        return {
-          from,
-          content,
-          timestamp,
-          date: new Date(timestamp).toISOString(),
-          isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
-        };
-      })
-      .sort((a, b) => a.timestamp - b.timestamp); // Sort chronologically
-
-    logger.info('Thread messages retrieved', {
-      threadId,
-      messageCount: messages.length
-    });
-
-    return messages;
-  } catch (error) {
-    logger.error('Error fetching thread:', {
-      threadId,
-      error: error.message,
-      stack: error.stack
-    });
-    return null;
-  }
-}
-
 async function processMessage(auth, messageId) {
   try {
-    const fullMessage = await gmail.users.messages.get({
+    const message = await gmail.users.messages.get({
       auth,
       userId: 'me',
       id: messageId,
       format: 'full'
     });
 
-    const { subject, from, content, senderEmail, threadId } = getEmailDetails(fullMessage.data);
-    
-    // Get the entire email thread
-    const threadMessages = await getThreadMessages(auth, threadId);
-    
+    const headers = message.data.payload.headers;
+    const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value;
+    const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
+    const content = parseEmailContent(message.data.payload);
+    const threadId = message.data.threadId;
+
+    // Extract email address
+    const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
+    const senderEmail = emailMatch[1];
+
     logger.info('Processing email', {
-      id: fullMessage.data.id,
-      from,
+      id: message.data.id,
+      threadId,
       subject,
-      threadMessagesCount: threadMessages?.length || 0
+      from
     });
 
-    // Only process if this is the latest message in the thread
+    // Get thread messages for context
+    const threadMessages = await getThreadMessages(auth, threadId);
+
+    // Only process if this is the latest message
     const isLatestMessage = threadMessages && 
-      threadMessages[threadMessages.length - 1].timestamp === parseInt(fullMessage.data.internalDate);
+      threadMessages[threadMessages.length - 1].timestamp === parseInt(message.data.internalDate);
 
     if (!isLatestMessage) {
       logger.info('Skipping non-latest message in thread', {
@@ -124,176 +118,60 @@ async function processMessage(auth, messageId) {
       return true;
     }
 
-    // Process with OpenAI, including thread context
-    const { requiresReply, generatedReply, reason, appraisalStatus } = await classifyAndProcessEmail(
+    // Process with OpenAI
+    const result = await classifyAndProcessEmail(
       content,
       senderEmail,
       threadMessages
     );
 
-    // Log to Google Sheets
+    // Log to sheets
     await logEmailProcessing({
       timestamp: new Date().toISOString(),
       sender: from,
       subject,
-      requiresReply,
-      reply: generatedReply || 'No reply needed',
-      reason,
-      appraisalStatus,
-      threadMessagesCount: threadMessages?.length || 0
-    });
-
-    logger.info('Email processed', {
-      id: fullMessage.data.id,
-      requiresReply,
-      hasReply: !!generatedReply,
-      hasAppraisalStatus: !!appraisalStatus,
+      requiresReply: result.requiresReply,
+      reply: result.generatedReply || 'No reply needed',
+      reason: result.reason,
+      analysis: result.analysis,
       threadMessagesCount: threadMessages?.length || 0
     });
 
     return true;
   } catch (error) {
-    if (error.code === 404) {
-      logger.warn('Message not found, skipping', { messageId });
-      return false;
-    }
-    throw error;
-  }
-}
-
-export async function sendEmail(to, subject, body, threadId = null) {
-  try {
-    const auth = await getGmailAuth();
-
-    // Create email content
-    const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
-    const messageParts = [
-      'From: Michelle Thompson <info@appraisily.com>',
-      `To: ${to}`,
-      'Content-Type: text/html; charset=utf-8',
-      'MIME-Version: 1.0',
-      `Subject: ${utf8Subject}`,
-      '',
-      body
-    ];
-    const message = messageParts.join('\n');
-
-    // Encode the message
-    const encodedMessage = Buffer.from(message)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-
-    // Prepare the API request
-    const request = {
-      auth,
-      userId: 'me',
-      resource: {
-        raw: encodedMessage,
-        ...(threadId && { threadId })
-      }
-    };
-
-    // Send the email
-    const response = await gmail.users.messages.send(request);
-
-    logger.info('Email sent successfully', {
-      messageId: response.data.id,
-      threadId: response.data.threadId,
-      to,
-      subject
-    });
-
-    return {
-      success: true,
-      messageId: response.data.id,
-      threadId: response.data.threadId
-    };
-  } catch (error) {
-    logger.error('Error sending email:', {
-      error: error.message,
-      stack: error.stack,
-      to,
-      subject
-    });
-    throw error;
+    logger.error('Error processing message:', error);
+    return false;
   }
 }
 
 export async function handleWebhook(data) {
   try {
-    logger.info('Processing webhook data', { data: JSON.stringify(data) });
-
-    if (!data.message || !data.message.data) {
-      throw new Error('Invalid webhook data');
-    }
-
-    const decodedData = Buffer.from(data.message.data, 'base64').toString();
-    logger.info('Decoded data', { decodedData });
-
-    const notification = JSON.parse(decodedData);
-    logger.info('Parsed notification', { notification });
-
-    if (!notification.historyId) {
+    const auth = await getGmailAuth();
+    const decodedData = JSON.parse(Buffer.from(data.message.data, 'base64').toString());
+    
+    if (!decodedData.historyId) {
       throw new Error('No historyId in notification');
     }
 
-    const auth = await getGmailAuth();
+    const history = await gmail.users.history.list({
+      auth,
+      userId: 'me',
+      startHistoryId: decodedData.historyId
+    });
 
-    // Initialize lastHistoryId if needed
-    if (!lastHistoryId) {
-      const profile = await gmail.users.getProfile({
-        auth,
-        userId: 'me'
-      });
-      lastHistoryId = profile.data.historyId;
-      logger.info('Initialized historyId', { historyId: lastHistoryId });
+    if (!history.data.history) {
       return;
     }
 
-    try {
-      // Get message history
-      const history = await gmail.users.history.list({
-        auth,
-        userId: 'me',
-        startHistoryId: lastHistoryId
-      });
+    // Process new messages
+    for (const item of history.data.history) {
+      if (!item.messages) continue;
 
-      logger.info('History retrieved', {
-        hasHistory: !!history.data.history,
-        count: history.data.history?.length || 0
-      });
+      const processPromises = item.messages.map(message => 
+        processMessage(auth, message.id)
+      );
 
-      if (!history.data.history) {
-        return;
-      }
-
-      // Process new messages
-      for (const item of history.data.history) {
-        if (!item.messages) continue;
-
-        // Process each message
-        const processPromises = item.messages.map(message => 
-          processMessage(auth, message.id)
-        );
-
-        // Wait for all messages to be processed
-        await Promise.all(processPromises);
-      }
-
-      // Update lastHistoryId only after successful processing
-      lastHistoryId = notification.historyId;
-      logger.info('Updated historyId', { historyId: lastHistoryId });
-
-    } catch (error) {
-      // If we get an invalid history ID error, reset and try again
-      if (error.code === 404) {
-        lastHistoryId = null;
-        logger.warn('History ID invalid, resetting', { error: error.message });
-        return;
-      }
-      throw error;
+      await Promise.all(processPromises);
     }
 
   } catch (error) {
