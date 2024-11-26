@@ -8,6 +8,15 @@ const gmail = google.gmail('v1');
 let lastHistoryId = null;
 const processedMessages = new Set(); // Track processed message IDs
 
+// Supported image MIME types
+const SUPPORTED_IMAGE_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic'
+];
+
 async function getGmailAuth() {
   const secrets = await getSecrets();
   
@@ -21,6 +30,80 @@ async function getGmailAuth() {
   });
 
   return auth;
+}
+
+async function extractImageAttachments(message) {
+  try {
+    const attachments = [];
+    const parts = message.payload.parts || [];
+
+    for (const part of parts) {
+      if (part.mimeType && SUPPORTED_IMAGE_TYPES.includes(part.mimeType) && part.body.attachmentId) {
+        attachments.push({
+          id: part.body.attachmentId,
+          mimeType: part.mimeType,
+          filename: part.filename
+        });
+      }
+    }
+
+    return attachments;
+  } catch (error) {
+    logger.error('Error extracting image attachments:', error);
+    return [];
+  }
+}
+
+async function downloadAttachment(auth, messageId, attachmentId) {
+  try {
+    const response = await gmail.users.messages.attachments.get({
+      auth,
+      userId: 'me',
+      messageId,
+      id: attachmentId
+    });
+
+    // Convert from base64url to binary
+    const buffer = Buffer.from(response.data.data, 'base64url');
+
+    return buffer;
+  } catch (error) {
+    logger.error('Error downloading attachment:', error);
+    return null;
+  }
+}
+
+async function processImageAttachments(auth, message) {
+  try {
+    const attachments = await extractImageAttachments(message);
+    
+    if (attachments.length === 0) {
+      return null;
+    }
+
+    logger.info('Found image attachments', {
+      messageId: message.id,
+      count: attachments.length,
+      types: attachments.map(a => a.mimeType)
+    });
+
+    const imageBuffers = [];
+    for (const attachment of attachments) {
+      const buffer = await downloadAttachment(auth, message.id, attachment.id);
+      if (buffer) {
+        imageBuffers.push({
+          buffer,
+          mimeType: attachment.mimeType,
+          filename: attachment.filename
+        });
+      }
+    }
+
+    return imageBuffers;
+  } catch (error) {
+    logger.error('Error processing image attachments:', error);
+    return null;
+  }
 }
 
 async function initializeHistoryId(auth) {
@@ -122,18 +205,21 @@ async function processMessage(auth, messageId) {
     const senderEmail = emailMatch[1];
 
     logger.info('Processing email', {
-      id: message.data.id,
+      messageId: message.data.id,
       threadId,
       subject,
       from
     });
+
+    // Check for image attachments
+    const imageAttachments = await processImageAttachments(auth, message.data);
 
     // Get thread messages for context
     const threadMessages = await getThreadMessages(auth, threadId);
 
     // Only process if this is the latest message
     const isLatestMessage = threadMessages && 
-      threadMessages[threadMessages.length - 1].timestamp === parseInt(message.data.internalDate);
+      threadMessages[threadMessages.length - 1].messageId === messageId;
 
     if (!isLatestMessage) {
       logger.info('Skipping non-latest message in thread', {
@@ -148,19 +234,22 @@ async function processMessage(auth, messageId) {
     const result = await classifyAndProcessEmail(
       content,
       senderEmail,
-      threadMessages
+      threadMessages,
+      imageAttachments // Pass image attachments to OpenAI processing
     );
 
     // Log to sheets
     await logEmailProcessing({
       timestamp: new Date().toISOString(),
+      messageId: message.data.id,
       sender: from,
       subject,
       requiresReply: result.requiresReply,
       reply: result.generatedReply || 'No reply needed',
       reason: result.reason,
       analysis: result.analysis,
-      threadMessagesCount: threadMessages?.length || 0
+      responseData: result.responseData,
+      hasImages: imageAttachments ? imageAttachments.length : 0
     });
 
     // Mark message as processed

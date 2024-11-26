@@ -39,8 +39,44 @@ steps:
       - '8080'
       - '--timeout'
       - '300'
+      - '--cpu-throttling'
       - '--service-account'
       - '$PROJECT_ID-compute@developer.gserviceaccount.com'
+
+  # Create Cloud Scheduler job for Gmail watch renewal
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: gcloud
+    args:
+      - 'scheduler'
+      - 'jobs'
+      - 'create'
+      - 'http'
+      - 'gmail-watch-renewal'
+      - '--schedule=0 */6 * * *'
+      - '--uri=https://michelle-gmail-856401495068.us-central1.run.app/api/gmail/renew-watch'
+      - '--http-method=POST'
+      - '--attempt-deadline=300s'
+      - '--time-zone=UTC'
+      - '--description=Renews Gmail watch every 6 hours to ensure continuous email processing'
+      - '--headers=Authorization=Bearer ${SHARED_SECRET}'
+    allowFailure: true  # In case the job already exists
+
+  # Create Cloud Scheduler job for health check
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: gcloud
+    args:
+      - 'scheduler'
+      - 'jobs'
+      - 'create'
+      - 'http'
+      - 'gmail-service-health'
+      - '--schedule=*/15 * * * *'
+      - '--uri=https://michelle-gmail-856401495068.us-central1.run.app/health'
+      - '--http-method=GET'
+      - '--attempt-deadline=30s'
+      - '--time-zone=UTC'
+      - '--description=Health check every 15 minutes to keep service warm'
+    allowFailure: true  # In case the job already exists
 
 images:
   - 'gcr.io/$PROJECT_ID/gmail-processor'

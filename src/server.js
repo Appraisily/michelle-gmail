@@ -9,9 +9,6 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// Set up watch renewal every 6 days
-const WATCH_RENEWAL_INTERVAL = 6 * 24 * 60 * 60 * 1000; // 6 days in milliseconds
-
 // Middleware to verify API key
 async function verifyApiKey(req, res, next) {
   try {
@@ -32,14 +29,71 @@ async function verifyApiKey(req, res, next) {
   }
 }
 
+// Middleware to verify shared secret for watch renewal
+async function verifySharedSecret(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Authorization header required' });
+    }
+
+    const secrets = await getSecrets();
+    const token = authHeader.split(' ')[1];
+    
+    if (token !== secrets.SHARED_SECRET) {
+      return res.status(403).json({ error: 'Invalid authorization' });
+    }
+
+    next();
+  } catch (error) {
+    logger.error('Authorization verification failed:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
 app.post('/api/gmail/webhook', async (req, res) => {
   try {
     logger.info('Webhook received', { body: JSON.stringify(req.body) });
+
+    // Extract Pub/Sub message data
+    const message = req.body.message;
+    const subscription = req.body.subscription;
+
+    if (!message || !subscription) {
+      logger.error('Invalid Pub/Sub message format');
+      return res.status(400).json({ error: 'Invalid message format' });
+    }
+
+    // Process the webhook
     await handleWebhook(req.body);
-    res.status(200).send('OK');
+
+    // Acknowledge the message by sending 200 status
+    // Cloud Run automatically acknowledges Pub/Sub messages when returning 2xx status
+    res.status(200).json({ 
+      status: 'success',
+      messageId: message.messageId,
+      subscription 
+    });
+
+    logger.info('Pub/Sub message acknowledged', { 
+      messageId: message.messageId,
+      subscription 
+    });
   } catch (error) {
     logger.error('Webhook error:', error);
-    res.status(500).send('Error');
+    // Return non-2xx status to nack the message and trigger a retry
+    res.status(500).json({ error: 'Processing failed' });
+  }
+});
+
+app.post('/api/gmail/renew-watch', verifySharedSecret, async (req, res) => {
+  try {
+    logger.info('Manual watch renewal requested');
+    await renewWatch();
+    res.status(200).json({ message: 'Watch renewed successfully' });
+  } catch (error) {
+    logger.error('Manual watch renewal failed:', error);
+    res.status(500).json({ error: 'Watch renewal failed' });
   }
 });
 
@@ -67,22 +121,16 @@ app.post('/api/email/send', verifyApiKey, async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'healthy' });
+  res.status(200).json({ 
+    status: 'healthy',
+    timestamp: new Date().toISOString()
+  });
 });
 
 async function startServer() {
   try {
     // Initial Gmail watch setup
     await setupGmailWatch();
-    
-    // Set up periodic watch renewal
-    setInterval(async () => {
-      try {
-        await renewWatch();
-      } catch (error) {
-        logger.error('Scheduled watch renewal failed:', error);
-      }
-    }, WATCH_RENEWAL_INTERVAL);
     
     app.listen(PORT, () => {
       logger.info('Server started', { port: PORT });

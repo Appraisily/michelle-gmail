@@ -17,42 +17,62 @@ async function initializeSheet(auth, spreadsheetId) {
     );
 
     if (!logsSheet) {
-      // Create the Logs sheet with headers
+      // Create the Logs sheet with headers and set column formats
+      const headers = [
+        ['Timestamp', 'Message ID', 'Sender', 'Subject', 'Has Attachments', 'Requires Reply', 'Reason', 
+         'Intent', 'Urgency', 'Response Type', 'Tone', 'Reply']
+      ];
+
       await sheets.spreadsheets.batchUpdate({
         auth,
         spreadsheetId,
         requestBody: {
-          requests: [{
-            addSheet: {
-              properties: {
-                title: 'Logs',
-                gridProperties: {
-                  rowCount: 1000,
-                  columnCount: 10
-                }
+          requests: [
+            {
+              updateCells: {
+                range: {
+                  sheetId: logsSheet.properties.sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: 1,
+                  startColumnIndex: 0,
+                  endColumnIndex: 12
+                },
+                rows: [{
+                  values: headers[0].map(header => ({
+                    userEnteredValue: { stringValue: header },
+                    userEnteredFormat: {
+                      textFormat: { bold: true },
+                      backgroundColor: { red: 0.9, green: 0.9, blue: 0.9 }
+                    }
+                  }))
+                }],
+                fields: 'userEnteredValue,userEnteredFormat'
+              }
+            },
+            {
+              repeatCell: {
+                range: {
+                  sheetId: logsSheet.properties.sheetId,
+                  startRowIndex: 1,
+                  startColumnIndex: 0,
+                  endColumnIndex: 1
+                },
+                cell: {
+                  userEnteredFormat: {
+                    numberFormat: {
+                      type: 'DATE_TIME',
+                      pattern: 'MM/dd/yyyy HH:mm:ss'
+                    }
+                  }
+                },
+                fields: 'userEnteredFormat.numberFormat'
               }
             }
-          }]
+          ]
         }
       });
 
-      // Add headers
-      const headers = [
-        ['Timestamp', 'Sender', 'Subject', 'Requires Reply', 'Reason', 
-         'Intent', 'Urgency', 'Response Type', 'Tone', 'Reply']
-      ];
-
-      await sheets.spreadsheets.values.update({
-        auth,
-        spreadsheetId,
-        range: 'Logs!A1:J1',
-        valueInputOption: 'RAW',
-        requestBody: {
-          values: headers
-        }
-      });
-
-      logger.info('Created Logs sheet with headers');
+      logger.info('Created Logs sheet with headers and formatting');
     }
   } catch (error) {
     logger.error('Error initializing sheet:', error);
@@ -79,18 +99,20 @@ export async function logEmailProcessing(logData) {
 
     logger.info('Logging to Google Sheets', {
       spreadsheetId,
+      messageId: logData.messageId,
       sender: logData.sender,
       subject: logData.subject
     });
 
-    const timestamp = new Date().toLocaleString('en-US', {
-      timeZone: 'America/New_York'
-    });
+    // Format timestamp as ISO string for proper date/time handling in Sheets
+    const timestamp = new Date().toISOString();
 
     const values = [[
-      timestamp,
+      timestamp, // Sheets will automatically convert ISO string to proper date/time
+      logData.messageId || 'N/A',
       logData.sender,
       logData.subject,
+      logData.hasImages ? 'Yes' : 'No',
       logData.requiresReply ? 'Yes' : 'No',
       logData.reason,
       logData.analysis?.intent || 'N/A',
@@ -103,8 +125,8 @@ export async function logEmailProcessing(logData) {
     await sheets.spreadsheets.values.append({
       auth,
       spreadsheetId,
-      range: 'Logs!A2:J',
-      valueInputOption: 'USER_ENTERED',
+      range: 'Logs!A2:L',
+      valueInputOption: 'USER_ENTERED', // This ensures proper date/time parsing
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
         values
@@ -113,13 +135,16 @@ export async function logEmailProcessing(logData) {
 
     logger.info('Email processing logged successfully', {
       spreadsheetId,
-      timestamp
+      messageId: logData.messageId,
+      timestamp,
+      hasAttachments: logData.hasImages ? 'Yes' : 'No'
     });
   } catch (error) {
     logger.error('Error logging to Google Sheets:', {
       error: error.message,
       stack: error.stack,
       data: {
+        messageId: logData.messageId,
         sender: logData.sender,
         subject: logData.subject,
         timestamp: new Date().toISOString()

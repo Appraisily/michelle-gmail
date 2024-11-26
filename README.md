@@ -2,37 +2,79 @@
 
 This service automatically processes incoming emails using Gmail API watch notifications, OpenAI for classification and response generation, and logs activities to Google Sheets. It integrates with Data Hub API for appraisal and sales data.
 
-## Project Structure
+## Architecture Overview
+
+### Current Implementation (Email Processing)
+```
+Gmail Inbox
+  ↓
+Gmail Watch API
+  ↓
+Pub/Sub Topic (historyId)
+  ↓
+Webhook
+  ↓
+Gmail API (fetch history)
+  ↓
+Gmail API (fetch full message)
+  ↓
+Data Hub API (fetch endpoints)
+  ↓
+OpenAI (classification)
+  ↓
+Data Hub API (customer data)
+  ↓
+OpenAI (response generation)
+  ↓
+Google Sheets (logging)
+```
+
+### Future Multimodal Architecture
+The system is designed to be extended for multiple communication channels:
 
 ```
-├── src/
-│   ├── server.js              # Main application entry point
-│   ├── services/
-│   │   ├── dataHub/          # Data Hub API integration
-│   │   │   ├── client.js     # API client implementation
-│   │   │   ├── types.js      # TypeScript-like type definitions
-│   │   │   └── index.js      # Main export file
-│   │   ├── openai/           # OpenAI integration
-│   │   │   ├── functions/    # OpenAI function definitions
-│   │   │   │   ├── appraisals.js  # Appraisal-related functions
-│   │   │   │   ├── sales.js       # Sales-related functions
-│   │   │   │   ├── email.js       # Email analysis functions
-│   │   │   │   └── index.js       # Function exports
-│   │   │   ├── prompts/     # System prompts
-│   │   │   │   ├── analysis.js    # Analysis prompts
-│   │   │   │   ├── response.js    # Response generation prompts
-│   │   │   │   └── index.js       # Prompt exports
-│   │   │   └── index.js     # Main OpenAI processing
-│   │   ├── gmailService.js  # Gmail API integration
-│   │   └── sheetsService.js # Google Sheets logging
-│   └── utils/
-│       ├── logger.js        # Centralized logging
-│       ├── monitoring.js    # Cloud Monitoring metrics
-│       └── secretManager.js # Secret Manager integration
-├── Dockerfile               # Container configuration
-├── cloudbuild.yaml         # Cloud Build deployment
-├── package.json            # Project dependencies
-└── README.md               # Project documentation
+Communication Channels
+├── Email (Gmail) - Currently Implemented
+├── WordPress Comments - Future
+└── Live Chat - Future
+
+Message Processing Flow
+├── Channel Adapters
+│   ├── Gmail Adapter (active)
+│   ├── WordPress Adapter (planned)
+│   └── LiveChat Adapter (planned)
+│
+├── Message Queue (Pub/Sub)
+│   └── Channel-specific topics
+│
+├── Unified Message Format
+│   ├── Channel identifier
+│   ├── Sender information
+│   ├── Content
+│   └── Metadata
+│
+└── Response Router
+    └── Channel-specific formatters
+```
+
+### Image Processing Pipeline (Planned)
+```
+Email with Attachments
+  ↓
+Image Detection & Extraction
+  ↓
+GPT-4V Analysis
+  ├── Object Description
+  ├── Condition Assessment
+  ├── Age Estimation
+  └── Notable Features
+  ↓
+Preliminary Value Range
+  ↓
+Response Generation
+  ├── Quick Assessment
+  ├── Value Indication
+  └── Professional Appraisal Offer
 ```
 
 ## Service Requirements
@@ -40,8 +82,9 @@ This service automatically processes incoming emails using Gmail API watch notif
 1. **Gmail Watch Management**
    - Initial watch setup during service startup
    - Watch expires after 7 days
-   - Automatic renewal via cron job every 6 days
+   - Automatic renewal via Cloud Scheduler every 6 hours
    - Only one active watch allowed per Gmail account
+   - Health check every 15 minutes to prevent cold starts
 
 2. **Authentication Requirements**
    - Gmail OAuth2 credentials
@@ -49,45 +92,13 @@ This service automatically processes incoming emails using Gmail API watch notif
    - OpenAI API key for email processing
    - Google Sheets access for logging
    - Data Hub API key for appraisal/sales data
+   - Shared secret for watch renewal endpoint
 
 3. **Runtime Requirements**
    - Node.js v20 or higher
    - Memory: 512Mi minimum
    - CPU: 1 core minimum
    - Persistent internet connection
-
-## Email Processing Flow
-
-1. **Gmail Watch Setup**
-   ```
-   Gmail Inbox
-     ↓
-   Gmail Watch API
-     ↓
-   Pub/Sub Topic (historyId)
-     ↓
-   Webhook
-     ↓
-   Gmail API (fetch history)
-     ↓
-   Gmail API (fetch full message)
-     ↓
-   Data Hub API (fetch endpoints)
-     ↓
-   OpenAI (classification)
-     ↓
-   Data Hub API (customer data)
-     ↓
-   OpenAI (response generation)
-     ↓
-   Google Sheets (logging)
-   ```
-
-2. **Thread Processing**
-   - Retrieves full email thread history
-   - Provides context to OpenAI for analysis
-   - Ensures responses consider previous conversations
-   - Maintains conversation continuity
 
 ## API Endpoints
 
@@ -105,6 +116,14 @@ Receives Gmail notifications via Pub/Sub push subscription.
   },
   "subscription": "subscription-name"
 }
+```
+
+### POST /api/gmail/renew-watch
+Manually renews Gmail watch subscription. Requires authentication.
+
+**Headers**:
+```
+Authorization: Bearer <shared-secret>
 ```
 
 ### POST /api/email/send
@@ -133,6 +152,17 @@ X-API-Key: your_api_key_here
   "success": true,
   "messageId": "message-id",
   "threadId": "thread-id"
+}
+```
+
+### GET /health
+Health check endpoint for service monitoring.
+
+**Response**:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-11-26T07:51:36.826Z"
 }
 ```
 
@@ -175,13 +205,19 @@ The service integrates with Data Hub API for customer data:
 - Email analysis functions
 - Response generation functions
 
+### 4. Image Analysis (Planned)
+- Process image attachments
+- Use GPT-4V for visual analysis
+- Generate detailed object descriptions
+- Provide preliminary value assessments
+
 ## Google Sheets Logging
 
 The service logs all email processing activities:
 
 ### Sheet Structure
 
-1. **Timestamp**: Processing date/time (EST)
+1. **Timestamp**: Processing date/time (UTC)
 2. **Sender**: Email sender
 3. **Subject**: Email subject
 4. **Requires Reply**: Yes/No
@@ -191,12 +227,10 @@ The service logs all email processing activities:
 8. **Response Type**: Response format
 9. **Tone**: Response tone
 10. **Reply**: Generated response
-11. **Thread Length**: Number of messages
-12. **Customer Data**: Retrieved information
 
 ### Log Entry Example
 ```
-Timestamp: 11/25/2024, 6:36:11 AM
+Timestamp: 2024-11-26T07:51:36.826Z
 Sender: customer@example.com
 Subject: Appraisal Status Inquiry
 Requires Reply: Yes
@@ -206,8 +240,6 @@ Urgency: medium
 Response Type: detailed
 Tone: friendly
 Reply: [Full response text]
-Thread Length: 3
-Customer Data: [JSON data]
 ```
 
 ## Required Permissions
@@ -261,6 +293,7 @@ gcloud secrets create GMAIL_REFRESH_TOKEN --replication-policy="automatic"
 gcloud secrets create OPENAI_API_KEY --replication-policy="automatic"
 gcloud secrets create MICHELLE_CHAT_LOG_SPREADSHEETID --replication-policy="automatic"
 gcloud secrets create DATA_HUB_API_KEY --replication-policy="automatic"
+gcloud secrets create SHARED_SECRET --replication-policy="automatic"
 
 # Add values
 echo -n "your-client-id" | gcloud secrets versions add GMAIL_CLIENT_ID --data-file=-
@@ -269,6 +302,7 @@ echo -n "your-refresh-token" | gcloud secrets versions add GMAIL_REFRESH_TOKEN -
 echo -n "your-openai-key" | gcloud secrets versions add OPENAI_API_KEY --data-file=-
 echo -n "your-sheet-id" | gcloud secrets versions add MICHELLE_CHAT_LOG_SPREADSHEETID --data-file=-
 echo -n "your-data-hub-key" | gcloud secrets versions add DATA_HUB_API_KEY --data-file=-
+echo -n "your-shared-secret" | gcloud secrets versions add SHARED_SECRET --data-file=-
 ```
 
 ## Setup Instructions

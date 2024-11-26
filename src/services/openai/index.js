@@ -9,6 +9,15 @@ import { systemPrompts } from './prompts.js';
 
 let openaiClient = null;
 
+// CRITICAL: DO NOT CHANGE THESE MODEL CONFIGURATIONS
+// These specific models are required for optimal performance
+const MODELS = {
+  // GPT-4-mini optimized for quick, accurate email classification
+  CLASSIFICATION: 'gpt-4o-mini',
+  // GPT-4 optimized for natural, contextual response generation
+  RESPONSE: 'gpt-4o'
+};
+
 async function getOpenAIClient() {
   if (!openaiClient) {
     const secrets = await getSecrets();
@@ -84,12 +93,24 @@ function parseOpenAIResponse(response) {
   }
 }
 
-export async function classifyAndProcessEmail(emailContent, senderEmail, threadMessages = null) {
+function formatImageAttachments(imageAttachments) {
+  if (!imageAttachments || imageAttachments.length === 0) return [];
+
+  return imageAttachments.map(img => ({
+    type: "image_url",
+    image_url: {
+      url: `data:${img.mimeType};base64,${img.buffer.toString('base64')}`
+    }
+  }));
+}
+
+export async function classifyAndProcessEmail(emailContent, senderEmail, threadMessages = null, imageAttachments = null) {
   try {
     logger.info('Starting email classification process', {
       hasThread: !!threadMessages,
       senderEmail,
-      threadLength: threadMessages?.length
+      threadLength: threadMessages?.length,
+      hasImages: imageAttachments?.length || 0
     });
 
     const openai = await getOpenAIClient();
@@ -103,19 +124,25 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
 
-    // Analyze the email
+    // Prepare messages array with text and images
+    const messages = [
+      {
+        role: "system",
+        content: systemPrompts.analysis(companyKnowledge, apiInfo)
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: `Analyze this email thoroughly:\n\n${fullContext}` },
+          ...(imageAttachments ? formatImageAttachments(imageAttachments) : [])
+        ]
+      }
+    ];
+
+    // Analyze the email using GPT-4-mini for quick classification
     const analysisResponse = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        {
-          role: "system",
-          content: systemPrompts.analysis(companyKnowledge, apiInfo)
-        },
-        {
-          role: "user",
-          content: `Analyze this email thoroughly:\n\n${fullContext}`
-        }
-      ],
+      model: MODELS.CLASSIFICATION,
+      messages,
       functions: [dataHubFunctions.makeRequest],
       function_call: "auto",
       temperature: 0.3
@@ -136,7 +163,8 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     recordMetric('email_classifications', 1);
     logger.info('Email analysis completed', {
       analysis,
-      hasCustomerData: !!customerData
+      hasCustomerData: !!customerData,
+      hasImages: !!imageAttachments
     });
 
     if (!analysis.requiresReply) {
@@ -149,9 +177,9 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
       };
     }
 
-    // Generate response
+    // Generate response using GPT-4 optimized for natural language
     const responseGeneration = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: MODELS.RESPONSE,
       messages: [
         {
           role: "system",
@@ -195,7 +223,8 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
       stack: error.stack,
       context: {
         hasThread: !!threadMessages,
-        senderEmail
+        senderEmail,
+        hasImages: !!imageAttachments
       },
       phase: error.phase || 'unknown'
     });
