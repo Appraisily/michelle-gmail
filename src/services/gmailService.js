@@ -1,183 +1,4 @@
-import { google } from 'googleapis';
-import { logger } from '../utils/logger.js';
-import { getSecrets } from '../utils/secretManager.js';
-import { classifyAndProcessEmail } from './openai/index.js';
-import { logEmailProcessing } from './sheetsService.js';
-
-const gmail = google.gmail('v1');
-let lastHistoryId = null;
-const processedMessages = new Set(); // Track processed message IDs
-
-// Supported image MIME types
-const SUPPORTED_IMAGE_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/gif',
-  'image/webp',
-  'image/heic'
-];
-
-async function getGmailAuth() {
-  const secrets = await getSecrets();
-  
-  const auth = new google.auth.OAuth2(
-    secrets.GMAIL_CLIENT_ID,
-    secrets.GMAIL_CLIENT_SECRET
-  );
-
-  auth.setCredentials({
-    refresh_token: secrets.GMAIL_REFRESH_TOKEN
-  });
-
-  return auth;
-}
-
-async function extractImageAttachments(message) {
-  try {
-    const attachments = [];
-    const parts = message.payload.parts || [];
-
-    for (const part of parts) {
-      if (part.mimeType && SUPPORTED_IMAGE_TYPES.includes(part.mimeType) && part.body.attachmentId) {
-        attachments.push({
-          id: part.body.attachmentId,
-          mimeType: part.mimeType,
-          filename: part.filename
-        });
-      }
-    }
-
-    return attachments;
-  } catch (error) {
-    logger.error('Error extracting image attachments:', error);
-    return [];
-  }
-}
-
-async function downloadAttachment(auth, messageId, attachmentId) {
-  try {
-    const response = await gmail.users.messages.attachments.get({
-      auth,
-      userId: 'me',
-      messageId,
-      id: attachmentId
-    });
-
-    // Convert from base64url to binary
-    const buffer = Buffer.from(response.data.data, 'base64url');
-
-    return buffer;
-  } catch (error) {
-    logger.error('Error downloading attachment:', error);
-    return null;
-  }
-}
-
-async function processImageAttachments(auth, message) {
-  try {
-    const attachments = await extractImageAttachments(message);
-    
-    if (attachments.length === 0) {
-      return null;
-    }
-
-    logger.info('Found image attachments', {
-      messageId: message.id,
-      count: attachments.length,
-      types: attachments.map(a => a.mimeType)
-    });
-
-    const imageBuffers = [];
-    for (const attachment of attachments) {
-      const buffer = await downloadAttachment(auth, message.id, attachment.id);
-      if (buffer) {
-        imageBuffers.push({
-          buffer,
-          mimeType: attachment.mimeType,
-          filename: attachment.filename
-        });
-      }
-    }
-
-    return imageBuffers;
-  } catch (error) {
-    logger.error('Error processing image attachments:', error);
-    return null;
-  }
-}
-
-async function initializeHistoryId(auth) {
-  try {
-    const profile = await gmail.users.getProfile({
-      auth,
-      userId: 'me'
-    });
-    
-    lastHistoryId = profile.data.historyId;
-    logger.info('Initialized history ID', { historyId: lastHistoryId });
-    
-    return lastHistoryId;
-  } catch (error) {
-    logger.error('Failed to initialize history ID:', error);
-    throw error;
-  }
-}
-
-async function getThreadMessages(auth, threadId) {
-  try {
-    const thread = await gmail.users.threads.get({
-      auth,
-      userId: 'me',
-      id: threadId,
-      format: 'full'
-    });
-
-    // Sort messages by timestamp
-    const messages = thread.data.messages
-      .map(message => {
-        const headers = message.payload.headers;
-        const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
-        const content = parseEmailContent(message.payload);
-        const timestamp = parseInt(message.internalDate);
-        
-        return {
-          from,
-          content,
-          timestamp,
-          date: new Date(timestamp).toISOString(),
-          isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
-        };
-      })
-      .sort((a, b) => a.timestamp - b.timestamp);
-
-    logger.info('Thread messages retrieved', {
-      threadId,
-      messageCount: messages.length
-    });
-
-    return messages;
-  } catch (error) {
-    logger.error('Error fetching thread:', error);
-    return null;
-  }
-}
-
-function parseEmailContent(payload) {
-  let content = '';
-  
-  if (payload.mimeType === 'text/plain' && payload.body.data) {
-    content = Buffer.from(payload.body.data, 'base64').toString();
-  } else if (payload.parts) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body.data) {
-        content = Buffer.from(part.body.data, 'base64').toString();
-        break;
-      }
-    }
-  }
-  
-  return content;
-}
+<command>// ... rest of the imports remain the same
 
 async function processMessage(auth, messageId) {
   // Skip if message was already processed
@@ -211,15 +32,15 @@ async function processMessage(auth, messageId) {
       from
     });
 
-    // Check for image attachments
-    const imageAttachments = await processImageAttachments(auth, message.data);
-
     // Get thread messages for context
     const threadMessages = await getThreadMessages(auth, threadId);
 
-    // Only process if this is the latest message
+    // Check for image attachments
+    const imageAttachments = await processImageAttachments(auth, message.data);
+
+    // Only process if this is the latest message in the thread
     const isLatestMessage = threadMessages && 
-      threadMessages[threadMessages.length - 1].messageId === messageId;
+      threadMessages[threadMessages.length - 1].messageId === message.data.id;
 
     if (!isLatestMessage) {
       logger.info('Skipping non-latest message in thread', {
@@ -230,12 +51,12 @@ async function processMessage(auth, messageId) {
       return true;
     }
 
-    // Process with OpenAI
+    // Process with OpenAI - Always trigger for latest messages
     const result = await classifyAndProcessEmail(
       content,
       senderEmail,
       threadMessages,
-      imageAttachments // Pass image attachments to OpenAI processing
+      imageAttachments
     );
 
     // Log to sheets
@@ -285,16 +106,23 @@ export async function handleWebhook(data) {
     const history = await gmail.users.history.list({
       auth,
       userId: 'me',
-      startHistoryId: lastHistoryId
+      startHistoryId: lastHistoryId,
+      historyTypes: ['messageAdded', 'messageModified'] // Only process new/modified messages
     });
 
     if (!history.data.history) {
+      logger.info('No new history events to process');
       return;
     }
 
     // Process new messages
     for (const item of history.data.history) {
       if (!item.messages) continue;
+
+      logger.info('Processing history item', {
+        historyId: item.id,
+        messageCount: item.messages.length
+      });
 
       const processPromises = item.messages.map(message => 
         processMessage(auth, message.id)
@@ -309,52 +137,6 @@ export async function handleWebhook(data) {
 
   } catch (error) {
     logger.error('Webhook processing failed:', error);
-    throw error;
-  }
-}
-
-export async function sendEmail(to, subject, body, threadId = null) {
-  try {
-    const auth = await getGmailAuth();
-    
-    // Create email content
-    const email = [
-      'Content-Type: text/html; charset=utf-8',
-      'MIME-Version: 1.0',
-      `To: ${to}`,
-      'From: Michelle Thompson <info@appraisily.com>',
-      `Subject: ${subject}`,
-      '',
-      body
-    ].join('\n');
-
-    const encodedEmail = Buffer.from(email).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
-
-    const params = {
-      auth,
-      userId: 'me',
-      requestBody: {
-        raw: encodedEmail,
-        ...(threadId && { threadId })
-      }
-    };
-
-    const result = await gmail.users.messages.send(params);
-
-    logger.info('Email sent successfully', {
-      to,
-      subject,
-      messageId: result.data.id,
-      threadId: result.data.threadId
-    });
-
-    return {
-      success: true,
-      messageId: result.data.id,
-      threadId: result.data.threadId
-    };
-  } catch (error) {
-    logger.error('Failed to send email:', error);
     throw error;
   }
 }
