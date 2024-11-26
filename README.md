@@ -57,19 +57,17 @@ Message Processing Flow
     └── Channel-specific formatters
 ```
 
-### Image Processing Pipeline (Planned)
+### Image Processing Pipeline
 ```
 Email with Attachments
   ↓
 Image Detection & Extraction
   ↓
-GPT-4V Analysis
+GPT-4o Analysis
   ├── Object Description
   ├── Condition Assessment
   ├── Age Estimation
   └── Notable Features
-  ↓
-Preliminary Value Range
   ↓
 Response Generation
   ├── Quick Assessment
@@ -192,24 +190,25 @@ The service integrates with Data Hub API for customer data:
 - Determines intent and urgency
 - Identifies required data lookups
 - Suggests response type
+- Classifies as APPRAISAL_LEAD or GENERAL_INQUIRY
 
-### 2. Response Generation
+### 2. Image Analysis
+- Process image attachments
+- Use GPT-4o for visual analysis
+- Generate detailed object descriptions
+- Provide preliminary assessments
+
+### 3. Response Generation
 - Considers full conversation thread
 - Incorporates customer data
 - Maintains consistent tone
 - Includes standardized signature
 
-### 3. Function Definitions
+### 4. Function Definitions
 - Appraisal-related functions
 - Sales-related functions
 - Email analysis functions
 - Response generation functions
-
-### 4. Image Analysis (Planned)
-- Process image attachments
-- Use GPT-4V for visual analysis
-- Generate detailed object descriptions
-- Provide preliminary value assessments
 
 ## Google Sheets Logging
 
@@ -218,27 +217,27 @@ The service logs all email processing activities:
 ### Sheet Structure
 
 1. **Timestamp**: Processing date/time (UTC)
-2. **Sender**: Email sender
-3. **Subject**: Email subject
-4. **Requires Reply**: Yes/No
-5. **Reason**: Analysis explanation
-6. **Intent**: Classified intent
-7. **Urgency**: Priority level
-8. **Response Type**: Response format
-9. **Tone**: Response tone
-10. **Reply**: Generated response
+2. **Message ID**: Unique Gmail message identifier
+3. **Sender**: Email sender
+4. **Subject**: Email subject
+5. **Has Attachments**: Yes/No
+6. **Requires Reply**: Yes/No
+7. **Reason**: Analysis explanation
+8. **Intent**: Classified intent
+9. **Urgency**: Priority level
+10. **Response Type**: Response format
 
 ### Log Entry Example
 ```
 Timestamp: 2024-11-26T07:51:36.826Z
 Sender: customer@example.com
 Subject: Appraisal Status Inquiry
+Has Attachments: No
 Requires Reply: Yes
 Reason: Customer requesting status update
 Intent: followup
 Urgency: medium
 Response Type: detailed
-Tone: friendly
 Reply: [Full response text]
 ```
 
@@ -333,6 +332,7 @@ Built-in monitoring metrics:
 - OpenAI failures
 - Data Hub requests
 - API latencies
+- Image analyses
 
 ## Logging
 
@@ -341,32 +341,3 @@ Cloud Run log levels:
 - WARNING: Important issues
 - INFO: Normal operations
 - DEBUG: Development details
-
-## Troubleshooting
-
-Common issues and solutions:
-
-1. **Gmail Watch Issues**
-   ```bash
-   # Check Pub/Sub permissions
-   gcloud pubsub topics get-iam-policy gmail-notifications
-   ```
-
-2. **Service Account Problems**
-   ```bash
-   # Verify permissions
-   gcloud projects get-iam-policy $PROJECT_ID \
-       --flatten="bindings[].members" \
-       --format='table(bindings.role)' \
-       --filter="bindings.members:$SERVICE_ACCOUNT"
-   ```
-
-3. **Data Hub API Errors**
-   - Check API key in Secret Manager
-   - Verify rate limits
-   - Check endpoint availability
-
-4. **OpenAI Issues**
-   - Verify API key
-   - Check quota usage
-   - Review function definitions

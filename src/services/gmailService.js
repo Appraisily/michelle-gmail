@@ -6,7 +6,6 @@ import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
 const processedMessages = new Set();
-let lastHistoryId = null;
 
 // Clean up old processed messages periodically
 setInterval(() => {
@@ -39,13 +38,16 @@ async function getGmailAuth() {
 
 async function getHistory(auth, startHistoryId) {
   try {
-    return await gmail.users.history.list({
+    logger.info('Fetching history', { startHistoryId });
+    
+    const response = await gmail.users.history.list({
       auth,
       userId: 'me',
       startHistoryId,
-      historyTypes: ['messageAdded'],
-      labelId: 'INBOX'
+      labelIds: ['INBOX']
     });
+
+    return response.data;
   } catch (error) {
     logger.error('Error fetching history:', error);
     throw error;
@@ -212,15 +214,15 @@ async function processMessage(auth, messageId) {
 
     // Log to sheets
     await logEmailProcessing({
-      timestamp: new Date().toISOString(),
       messageId: message.data.id,
+      timestamp: new Date().toISOString(),
       sender: from,
       subject,
       hasImages: imageAttachments.length > 0,
       requiresReply: result.requiresReply,
       reply: result.generatedReply || 'No reply needed',
       reason: result.reason,
-      analysis: result.analysis
+      classification: result.classification
     });
 
     // Mark message as processed
@@ -236,43 +238,42 @@ async function processMessage(auth, messageId) {
 export async function handleWebhook(data) {
   try {
     const auth = await getGmailAuth();
+    
+    // Decode Pub/Sub message
     const decodedData = JSON.parse(Buffer.from(data.message.data, 'base64').toString());
     
     if (!decodedData.historyId) {
       throw new Error('No historyId in notification');
     }
 
-    // Initialize lastHistoryId if not set
-    if (!lastHistoryId) {
-      const profile = await gmail.users.getProfile({
-        auth,
-        userId: 'me'
-      });
-      lastHistoryId = profile.data.historyId;
-    }
+    // Get history since last processed ID
+    const history = await getHistory(auth, decodedData.historyId);
 
-    const history = await getHistory(auth, lastHistoryId);
-
-    if (history.data.history) {
-      for (const item of history.data.history) {
+    if (history.history) {
+      for (const item of history.history) {
         logger.info('Processing history item', {
           historyId: item.id,
           messageCount: item.messages?.length
         });
 
-        if (!item.messages) continue;
+        if (item.messages) {
+          const processPromises = item.messages.map(message => 
+            processMessage(auth, message.id)
+          );
 
-        const processPromises = item.messages.map(message => 
-          processMessage(auth, message.id)
-        );
-
-        await Promise.all(processPromises);
+          await Promise.all(processPromises);
+        }
       }
     }
 
-    // Update lastHistoryId after successful processing
-    lastHistoryId = decodedData.historyId;
-    logger.info('Updated history ID', { historyId: lastHistoryId });
+    // Update last processed history ID
+    logger.info('Updated history ID', { historyId: decodedData.historyId });
+
+    // Acknowledge Pub/Sub message
+    logger.info('Pub/Sub message acknowledged', {
+      messageId: data.message.messageId,
+      subscription: data.subscription
+    });
 
   } catch (error) {
     logger.error('Webhook processing failed:', error);

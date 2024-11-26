@@ -19,8 +19,8 @@ async function initializeSheet(auth, spreadsheetId) {
     if (!logsSheet) {
       // Create the Logs sheet with headers and set column formats
       const headers = [
-        ['Timestamp', 'Message ID', 'Sender', 'Subject', 'Has Attachments', 'Requires Reply', 'Reason', 
-         'Intent', 'Urgency', 'Response Type', 'Tone', 'Reply']
+        ['Timestamp', 'Message ID', 'Sender', 'Subject', 'Has Attachments', 'Requires Reply', 'Classification', 'Reason', 
+         'Intent', 'Urgency', 'Response Type']
       ];
 
       await sheets.spreadsheets.batchUpdate({
@@ -35,7 +35,7 @@ async function initializeSheet(auth, spreadsheetId) {
                   startRowIndex: 0,
                   endRowIndex: 1,
                   startColumnIndex: 0,
-                  endColumnIndex: 12
+                  endColumnIndex: 11
                 },
                 rows: [{
                   values: headers[0].map(header => ({
@@ -61,7 +61,7 @@ async function initializeSheet(auth, spreadsheetId) {
                   userEnteredFormat: {
                     numberFormat: {
                       type: 'DATE_TIME',
-                      pattern: 'MM/dd/yyyy HH:mm:ss'
+                      pattern: 'yyyy-MM-dd HH:mm:ss'
                     }
                   }
                 },
@@ -107,25 +107,27 @@ export async function logEmailProcessing(logData) {
     // Format timestamp as ISO string for proper date/time handling in Sheets
     const timestamp = new Date().toISOString();
 
+    // Determine classification based on intent or presence of images
+    const classification = logData.hasImages ? 'APPRAISAL_LEAD' : 'GENERAL_INQUIRY';
+
     const values = [[
-      timestamp, // Sheets will automatically convert ISO string to proper date/time
+      timestamp,
       logData.messageId || 'N/A',
       logData.sender,
       logData.subject,
       logData.hasImages ? 'Yes' : 'No',
       logData.requiresReply ? 'Yes' : 'No',
+      classification,
       logData.reason,
-      logData.analysis?.intent || 'N/A',
-      logData.analysis?.urgency || 'N/A',
-      logData.analysis?.suggestedResponseType || 'N/A',
-      logData.responseData?.tone || 'N/A',
-      logData.reply || 'No reply needed'
+      logData.classification?.intent || 'N/A',
+      logData.classification?.urgency || 'N/A',
+      logData.classification?.suggestedResponseType || 'N/A'
     ]];
 
     await sheets.spreadsheets.values.append({
       auth,
       spreadsheetId,
-      range: 'Logs!A2:L',
+      range: 'Logs!A2:K',
       valueInputOption: 'USER_ENTERED', // This ensures proper date/time parsing
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
@@ -134,10 +136,10 @@ export async function logEmailProcessing(logData) {
     });
 
     logger.info('Email processing logged successfully', {
-      spreadsheetId,
       messageId: logData.messageId,
       timestamp,
-      hasAttachments: logData.hasImages ? 'Yes' : 'No'
+      hasAttachments: logData.hasImages ? 'Yes' : 'No',
+      classification
     });
   } catch (error) {
     logger.error('Error logging to Google Sheets:', {

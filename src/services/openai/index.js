@@ -10,11 +10,10 @@ import { systemPrompts } from './prompts.js';
 let openaiClient = null;
 
 // CRITICAL: DO NOT CHANGE THESE MODEL CONFIGURATIONS
-// These specific models are required for optimal performance
 const MODELS = {
   // GPT-4-mini optimized for quick, accurate email classification
   CLASSIFICATION: 'gpt-4o-mini',
-  // GPT-4 optimized for natural, contextual response generation
+  // GPT-4 optimized for natural, contextual response generation and image analysis
   RESPONSE: 'gpt-4o'
 };
 
@@ -67,17 +66,15 @@ function parseOpenAIResponse(response) {
       };
     }
 
-    // Try to parse as JSON first
     try {
       return JSON.parse(response.choices[0].message.content);
     } catch (e) {
-      // If not JSON, create a structured response
       const content = response.choices[0].message.content;
       return {
         requiresReply: content.toLowerCase().includes('requires reply') || content.toLowerCase().includes('needs response'),
         intent: "unknown",
         urgency: "medium",
-        reason: content.slice(0, 200), // First 200 chars as reason
+        reason: content.slice(0, 200),
         suggestedResponseType: "detailed"
       };
     }
@@ -124,74 +121,96 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
 
-    // Prepare messages array with text and images
-    const messages = [
-      {
-        role: "system",
-        content: systemPrompts.analysis(companyKnowledge, apiInfo)
-      },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: `Analyze this email thoroughly:\n\n${fullContext}` },
-          ...(imageAttachments ? formatImageAttachments(imageAttachments) : [])
-        ]
-      }
-    ];
-
-    // Analyze the email using GPT-4-mini for quick classification
-    const analysisResponse = await openai.chat.completions.create({
+    // Initial classification with GPT-4o-mini
+    const classificationResponse = await openai.chat.completions.create({
       model: MODELS.CLASSIFICATION,
-      messages,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompts.analysis(companyKnowledge, apiInfo)
+        },
+        {
+          role: "user",
+          content: `Analyze this email thoroughly:\n\n${fullContext}`
+        }
+      ],
       functions: [dataHubFunctions.makeRequest],
       function_call: "auto",
       temperature: 0.3
     });
 
-    // Handle any function calls from analysis
+    // Handle any function calls from classification
     let customerData = null;
-    if (analysisResponse.choices[0].message.function_call) {
+    if (classificationResponse.choices[0].message.function_call) {
       customerData = await handleFunctionCall(
-        analysisResponse.choices[0].message.function_call,
+        classificationResponse.choices[0].message.function_call,
         senderEmail
       );
     }
 
-    // Get the analysis result
-    const analysis = parseOpenAIResponse(analysisResponse);
+    // Get the classification result
+    const classification = parseOpenAIResponse(classificationResponse);
+
+    // If there are images, perform additional analysis with GPT-4o
+    let imageAnalysis = null;
+    if (imageAttachments && imageAttachments.length > 0) {
+      const imageAnalysisResponse = await openai.chat.completions.create({
+        model: MODELS.RESPONSE, // Using GPT-4o for image analysis
+        messages: [
+          {
+            role: "system",
+            content: systemPrompts.imageAnalysis(companyKnowledge)
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Analyze these images of potential items for appraisal:" },
+              ...formatImageAttachments(imageAttachments)
+            ]
+          }
+        ],
+        temperature: 0.7
+      });
+
+      imageAnalysis = imageAnalysisResponse.choices[0].message.content;
+      classification.intent = "APPRAISAL_LEAD";
+      classification.requiresReply = true;
+    }
 
     recordMetric('email_classifications', 1);
     logger.info('Email analysis completed', {
-      analysis,
+      classification,
       hasCustomerData: !!customerData,
-      hasImages: !!imageAttachments
+      hasImages: !!imageAttachments,
+      hasImageAnalysis: !!imageAnalysis
     });
 
-    if (!analysis.requiresReply) {
+    if (!classification.requiresReply) {
       return {
         requiresReply: false,
         generatedReply: null,
-        reason: analysis.reason,
-        analysis,
+        reason: classification.reason,
+        classification,
         customerData
       };
     }
 
-    // Generate response using GPT-4 optimized for natural language
+    // Generate response using GPT-4o
     const responseGeneration = await openai.chat.completions.create({
       model: MODELS.RESPONSE,
       messages: [
         {
           role: "system",
           content: systemPrompts.response(
-            analysis.suggestedResponseType,
-            analysis.urgency,
-            companyKnowledge
+            classification.suggestedResponseType,
+            classification.urgency,
+            companyKnowledge,
+            imageAnalysis
           )
         },
         {
           role: "user",
-          content: `Full email thread:\n${fullContext}\n\nAnalysis: ${JSON.stringify(analysis)}\n\nCustomer Data: ${JSON.stringify(customerData)}\n\nGenerate an appropriate response.`
+          content: `Full email thread:\n${fullContext}\n\nClassification: ${JSON.stringify(classification)}\n\nCustomer Data: ${JSON.stringify(customerData)}\n${imageAnalysis ? `\nImage Analysis: ${imageAnalysis}` : ''}\n\nGenerate an appropriate response.`
         }
       ],
       temperature: 0.7
@@ -199,22 +218,18 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
 
     const responseContent = responseGeneration.choices[0].message.content;
     
-    // Handle any function calls from response generation
-    if (responseGeneration.choices[0].message.function_call) {
-      await handleFunctionCall(
-        responseGeneration.choices[0].message.function_call,
-        senderEmail
-      );
-    }
-
     recordMetric('replies_generated', 1);
+    if (imageAnalysis) {
+      recordMetric('image_analyses', 1);
+    }
 
     return {
       requiresReply: true,
       generatedReply: responseContent,
-      reason: analysis.reason,
-      analysis,
-      customerData
+      reason: classification.reason,
+      classification,
+      customerData,
+      imageAnalysis
     };
 
   } catch (error) {
