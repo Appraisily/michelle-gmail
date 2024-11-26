@@ -19,6 +19,12 @@ async function getThreadMessages(auth, threadId) {
       format: 'full'
     });
 
+    logger.debug('Retrieved thread data', {
+      threadId,
+      messageCount: thread.data.messages.length,
+      labels: thread.data.messages[0].labelIds
+    });
+
     // Sort messages by date and limit thread depth
     const messages = thread.data.messages
       .map(message => {
@@ -42,11 +48,12 @@ async function getThreadMessages(auth, threadId) {
       .sort((a, b) => b.timestamp - a.timestamp) // Sort newest first
       .slice(0, MAX_THREAD_DEPTH); // Keep only most recent messages
 
-    logger.info('Thread messages retrieved', {
+    logger.debug('Processed thread messages', {
       threadId,
       messageCount: messages.length,
       newestMessage: messages[0]?.date,
-      oldestMessage: messages[messages.length - 1]?.date
+      oldestMessage: messages[messages.length - 1]?.date,
+      messageIds: messages.map(m => m.id)
     });
 
     return messages;
@@ -87,6 +94,14 @@ function parseEmailContent(payload, depth = 0) {
       .replace(/^\s+|\s+$/g, '')
       .replace(/[\n\s]+$/g, '\n');
 
+    logger.debug('Parsed email content', {
+      contentLength: content.length,
+      mimeType: payload.mimeType,
+      depth,
+      hasBody: !!payload.body,
+      hasParts: !!payload.parts
+    });
+
     return content;
   } catch (error) {
     logger.error('Error parsing email content:', {
@@ -126,13 +141,14 @@ export async function processMessage(auth, messageId) {
     const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
     const senderEmail = emailMatch[1];
 
-    logger.info('Processing email', {
+    logger.debug('Processing email message', {
       messageId: message.data.id,
       threadId,
       subject,
       from,
       labels,
-      timestamp: new Date(parseInt(message.data.internalDate)).toISOString()
+      timestamp: new Date(parseInt(message.data.internalDate)).toISOString(),
+      contentLength: content.length
     });
 
     // Get thread messages for context
@@ -155,6 +171,13 @@ export async function processMessage(auth, messageId) {
 
     // Extract image attachments
     const imageAttachments = await extractImageAttachments(auth, message.data);
+
+    logger.debug('Processing message with OpenAI', {
+      messageId,
+      hasThread: !!threadMessages,
+      threadLength: threadMessages?.length,
+      hasImages: imageAttachments.length > 0
+    });
 
     // Process with OpenAI
     const result = await classifyAndProcessEmail(
@@ -186,6 +209,10 @@ export async function processMessage(auth, messageId) {
     if (processedMessages.size > 1000) {
       const oldestMessages = Array.from(processedMessages).slice(0, 500);
       oldestMessages.forEach(id => processedMessages.delete(id));
+      logger.debug('Cleaned up processed messages cache', {
+        removed: oldestMessages.length,
+        remaining: processedMessages.size
+      });
     }
 
     return true;

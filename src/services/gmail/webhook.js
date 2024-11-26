@@ -50,6 +50,14 @@ async function fetchHistory(auth, startHistoryId, pageToken = null) {
     });
 
     const history = await gmail.users.history.list(params);
+
+    logger.debug('History data received:', {
+      hasHistory: !!history.data.history,
+      messageCount: history.data.history?.length || 0,
+      hasNextPage: !!history.data.nextPageToken,
+      historyId: history.data.historyId
+    });
+
     return history.data;
   } catch (error) {
     // Handle specific error cases
@@ -67,9 +75,14 @@ async function processHistoryItem(auth, item, retryCount = 0) {
       return;
     }
 
-    logger.info('Processing history item', {
+    logger.debug('Processing history item', {
       historyId: item.id,
-      messageCount: item.messages.length
+      messageCount: item.messages.length,
+      messages: item.messages.map(m => ({
+        id: m.id,
+        threadId: m.threadId,
+        labelIds: m.labelIds
+      }))
     });
 
     // Sort messages by timestamp, newest first
@@ -80,12 +93,20 @@ async function processHistoryItem(auth, item, retryCount = 0) {
     // Process latest message immediately
     if (sortedMessages.length > 0) {
       const latestMessage = sortedMessages[0];
+      logger.debug('Processing latest message first', {
+        messageId: latestMessage.id,
+        threadId: latestMessage.threadId
+      });
       await processMessage(auth, latestMessage.id);
     }
 
     // Process remaining messages in parallel
     if (sortedMessages.length > 1) {
       const remainingMessages = sortedMessages.slice(1);
+      logger.debug('Processing remaining messages', {
+        count: remainingMessages.length,
+        messageIds: remainingMessages.map(m => m.id)
+      });
       await Promise.all(
         remainingMessages.map(message => 
           processMessage(auth, message.id)
@@ -100,6 +121,10 @@ async function processHistoryItem(auth, item, retryCount = 0) {
     if (processedHistoryIds.size > 1000) {
       const oldestIds = Array.from(processedHistoryIds).slice(0, 500);
       oldestIds.forEach(id => processedHistoryIds.delete(id));
+      logger.debug('Cleaned up processed history IDs', {
+        removed: oldestIds.length,
+        remaining: processedHistoryIds.size
+      });
     }
 
   } catch (error) {
@@ -133,20 +158,10 @@ export async function handleWebhook(data) {
       throw new Error('No historyId in notification');
     }
 
-    // Validate history ID
-    const receivedHistoryId = parseInt(decodedData.historyId);
-    if (lastHistoryId && receivedHistoryId <= parseInt(lastHistoryId)) {
-      logger.warn('Received older history ID, skipping', {
-        current: lastHistoryId,
-        received: receivedHistoryId
-      });
-      return;
-    }
-
-    logger.debug('Received webhook notification', {
-      historyId: receivedHistoryId,
-      messageId: data.message.messageId,
-      publishTime: data.message.publishTime
+    logger.debug('Decoded Pub/Sub data:', {
+      historyId: decodedData.historyId,
+      emailAddress: decodedData.emailAddress,
+      rawData: data.message.data
     });
 
     // Initialize lastHistoryId if not set
@@ -181,7 +196,7 @@ export async function handleWebhook(data) {
     } while (pageToken);
 
     // Update lastHistoryId after successful processing
-    lastHistoryId = receivedHistoryId;
+    lastHistoryId = decodedData.historyId;
     logger.info('Updated history ID', { historyId: lastHistoryId });
 
   } catch (error) {
