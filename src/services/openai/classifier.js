@@ -1,99 +1,79 @@
 import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { systemPrompts } from './prompts.js';
-import { dataHubFunctions } from './functions.js';
 import { getOpenAIClient } from './client.js';
 import { dataHubClient } from '../dataHub/client.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o-mini';
 
-async function handleFunctionCall(functionCall, senderEmail) {
+async function validateApiInfo(apiInfo) {
   try {
-    const { name, arguments: args } = functionCall;
-    const parsedArgs = JSON.parse(args);
-
-    logger.debug('Handling function call in classifier', {
-      function: name,
-      arguments: parsedArgs,
-      senderEmail
-    });
-
-    if (name === 'makeDataHubRequest') {
-      const { endpoint, method, params } = parsedArgs;
-      const finalParams = {
-        ...params,
-        email: params?.email || senderEmail
-      };
-      
-      return await dataHubClient.makeRequest(endpoint, method, finalParams);
+    if (!apiInfo || typeof apiInfo !== 'object') {
+      logger.warn('Invalid API info received, fetching fresh data');
+      return await dataHubClient.fetchEndpoints();
     }
 
-    return null;
-  } catch (error) {
-    logger.error('Error handling function call in classifier:', error);
-    return null;
-  }
-}
-
-function parseClassificationResponse(response) {
-  try {
-    logger.debug('Parsing classification response', {
-      hasChoices: !!response.choices,
-      firstChoice: response.choices?.[0],
-      messageContent: response.choices?.[0]?.message?.content
-    });
-
-    if (!response.choices?.[0]?.message?.content) {
-      return {
-        requiresReply: true,
-        intent: "unknown",
-        urgency: "medium",
-        reason: "Unable to parse classification",
-        suggestedResponseType: "detailed"
-      };
-    }
-
-    try {
-      return JSON.parse(response.choices[0].message.content);
-    } catch (e) {
-      logger.debug('Failed to parse JSON response, using text fallback', {
-        error: e.message,
-        content: response.choices[0].message.content
+    // Validate endpoints structure
+    if (!Array.isArray(apiInfo.endpoints)) {
+      logger.warn('Invalid endpoints structure:', {
+        endpoints: apiInfo.endpoints,
+        type: typeof apiInfo.endpoints
       });
-
-      const content = response.choices[0].message.content;
-      return {
-        requiresReply: content.toLowerCase().includes('requires reply') || content.toLowerCase().includes('needs response'),
-        intent: "unknown",
-        urgency: "medium",
-        reason: content.slice(0, 200),
-        suggestedResponseType: "detailed"
-      };
+      apiInfo.endpoints = [];
     }
+
+    // Validate authentication
+    if (!apiInfo.authentication || typeof apiInfo.authentication !== 'object') {
+      logger.warn('Invalid authentication structure:', {
+        authentication: apiInfo.authentication,
+        type: typeof apiInfo.authentication
+      });
+      apiInfo.authentication = {};
+    }
+
+    // Validate rate limiting
+    if (!apiInfo.rateLimiting || typeof apiInfo.rateLimiting !== 'object') {
+      logger.warn('Invalid rate limiting structure:', {
+        rateLimiting: apiInfo.rateLimiting,
+        type: typeof apiInfo.rateLimiting
+      });
+      apiInfo.rateLimiting = {};
+    }
+
+    return apiInfo;
   } catch (error) {
-    logger.error('Error parsing classification response:', error);
+    logger.error('Error validating API info:', {
+      error: error.message,
+      stack: error.stack
+    });
     return {
-      requiresReply: true,
-      intent: "unknown",
-      urgency: "medium",
-      reason: "Error parsing response",
-      suggestedResponseType: "detailed"
+      endpoints: [],
+      authentication: {},
+      rateLimiting: {}
     };
   }
 }
 
-export async function classifyEmail(emailContent, senderEmail, threadMessages = null, imageAttachments = null, companyKnowledge, apiInfo) {
+export async function classifyEmail(
+  emailContent,
+  senderEmail,
+  threadMessages = null,
+  imageAttachments = null,
+  companyKnowledge,
+  apiInfo
+) {
   try {
-    logger.debug('Starting email classification with details', {
+    logger.debug('Starting email classification', {
       hasThread: !!threadMessages,
       threadLength: threadMessages?.length,
-      hasImages: imageAttachments?.length || 0,
+      hasImages: !!imageAttachments?.length,
       senderEmail,
-      emailContentLength: emailContent?.length,
-      hasApiInfo: !!apiInfo,
-      hasCompanyKnowledge: !!companyKnowledge
+      contentLength: emailContent?.length
     });
+
+    // Validate API info structure
+    const validatedApiInfo = await validateApiInfo(apiInfo);
 
     const openai = await getOpenAIClient();
     
@@ -103,22 +83,10 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
 
-    // Ensure apiInfo has the correct structure
-    const formattedApiInfo = apiInfo ? {
-      endpoints: Array.isArray(apiInfo.endpoints) ? apiInfo.endpoints : [],
-      authentication: apiInfo.authentication || {},
-      rateLimiting: apiInfo.rateLimiting || {}
-    } : {
-      endpoints: [],
-      authentication: {},
-      rateLimiting: {}
-    };
-
-    logger.debug('Preparing OpenAI request', {
-      model: MODEL,
-      threadContext: !!threadContext,
+    logger.debug('Preparing classification request', {
+      hasThreadContext: !!threadContext,
       fullContextLength: fullContext.length,
-      apiEndpoints: formattedApiInfo.endpoints.length
+      apiEndpoints: validatedApiInfo.endpoints.length
     });
 
     // Initial classification
@@ -127,35 +95,17 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
       messages: [
         {
           role: "system",
-          content: systemPrompts.analysis(companyKnowledge, formattedApiInfo)
+          content: systemPrompts.analysis(companyKnowledge, validatedApiInfo)
         },
         {
           role: "user",
           content: `Analyze this email thoroughly:\n\n${fullContext}`
         }
       ],
-      functions: [dataHubFunctions.makeRequest],
-      function_call: "auto",
-      temperature: 0.3
+      temperature: 0.3,
+      max_tokens: 500
     });
 
-    logger.debug('Received OpenAI classification response', {
-      responseId: classificationResponse.id,
-      model: classificationResponse.model,
-      hasFunctionCall: !!classificationResponse.choices[0].message.function_call,
-      responseContent: classificationResponse.choices[0].message.content
-    });
-
-    // Handle any function calls
-    let customerData = null;
-    if (classificationResponse.choices[0].message.function_call) {
-      customerData = await handleFunctionCall(
-        classificationResponse.choices[0].message.function_call,
-        senderEmail
-      );
-    }
-
-    // Parse classification result
     const classification = parseClassificationResponse(classificationResponse);
 
     // If there are images, mark as APPRAISAL_LEAD
@@ -165,15 +115,15 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
     }
 
     recordMetric('email_classifications', 1);
+    
     logger.info('Email classification completed', {
-      classification,
-      hasCustomerData: !!customerData,
-      hasImages: !!imageAttachments
+      intent: classification.intent,
+      urgency: classification.urgency,
+      requiresReply: classification.requiresReply
     });
 
     return {
       classification,
-      customerData,
       requiresReply: classification.requiresReply
     };
 
@@ -192,8 +142,53 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
   }
 }
 
+function parseClassificationResponse(response) {
+  try {
+    if (!response.choices?.[0]?.message?.content) {
+      logger.warn('Invalid classification response format');
+      return {
+        intent: "unknown",
+        urgency: "medium",
+        requiresReply: true,
+        reason: "Unable to parse classification",
+        suggestedResponseType: "detailed"
+      };
+    }
+
+    const content = response.choices[0].message.content;
+
+    try {
+      return JSON.parse(content);
+    } catch (e) {
+      logger.warn('Failed to parse JSON response:', {
+        error: e.message,
+        content
+      });
+
+      return {
+        intent: "unknown",
+        urgency: "medium",
+        requiresReply: content.toLowerCase().includes('requires reply'),
+        reason: content.slice(0, 200),
+        suggestedResponseType: "detailed"
+      };
+    }
+  } catch (error) {
+    logger.error('Error parsing classification:', error);
+    return {
+      intent: "unknown",
+      urgency: "medium",
+      requiresReply: true,
+      reason: "Error parsing response",
+      suggestedResponseType: "detailed"
+    };
+  }
+}
+
 function formatThreadForPrompt(threadMessages) {
-  if (!threadMessages || threadMessages.length === 0) return '';
+  if (!threadMessages || threadMessages.length === 0) {
+    return '';
+  }
 
   return threadMessages
     .map(msg => {

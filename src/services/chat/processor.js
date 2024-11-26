@@ -102,10 +102,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
 
     return {
       type: 'response',
-      clientId,
-      conversationId: message.conversationId,
       messageId: responseId,
-      replyTo: message.id,
       content: reply,
       timestamp: new Date().toISOString()
     };
@@ -136,20 +133,9 @@ async function processWithRetry(message, clientId, retryCount = 0) {
 
 export async function processChat(message, clientId) {
   try {
-    logger.info('Processing chat message', {
-      clientId,
-      messageType: message.type,
-      hasContent: !!message.content,
-      conversationId: message.conversationId
-    });
-
-    // Handle ping messages
-    if (message.type === 'ping') {
-      return {
-        type: 'pong',
-        clientId,
-        timestamp: new Date().toISOString()
-      };
+    // Skip processing for non-chat messages
+    if (!message.content) {
+      return null;
     }
 
     // Process chat message

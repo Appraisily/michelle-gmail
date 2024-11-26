@@ -8,8 +8,18 @@ export const RATE_LIMIT_WINDOW = 1000; // 1 second between messages
 export async function handleMessage(ws, data, client) {
   try {
     const message = JSON.parse(data);
+
+    // Handle ping messages directly without logging or processing
+    if (message.type === 'ping') {
+      ws.send(JSON.stringify({
+        type: 'pong',
+        clientId: client.id,
+        timestamp: new Date().toISOString()
+      }));
+      return;
+    }
     
-    // Rate limiting check
+    // Rate limiting check (skip for ping/pong)
     const now = Date.now();
     if (now - client.lastMessage < RATE_LIMIT_WINDOW) {
       sendError(ws, client, 'Please wait a moment before sending another message');
@@ -20,11 +30,11 @@ export async function handleMessage(ws, data, client) {
     client.lastMessage = now;
     client.messageCount++;
 
-    logger.info('Received chat message', {
+    logger.info('Processing chat message', {
       clientId: client.id,
       conversationId: client.conversationId,
       messageType: message.type,
-      timestamp: new Date().toISOString()
+      hasContent: !!message.content
     });
 
     const response = await processChat({
@@ -94,24 +104,15 @@ function sendWelcomeMessage(ws, client) {
 function sendResponse(ws, client, response) {
   // Ensure response has all required fields
   const formattedResponse = {
-    type: response.type,
+    type: response.type || 'response',
     clientId: client.id,
     conversationId: client.conversationId,
     messageId: response.messageId,
-    replyTo: response.replyTo,
-    content: response.content || response.message,
+    content: response.content || response.reply,
     timestamp: response.timestamp || new Date().toISOString()
   };
 
   ws.send(JSON.stringify(formattedResponse));
-
-  logger.debug('Sent response', {
-    clientId: client.id,
-    conversationId: client.conversationId,
-    messageId: formattedResponse.messageId,
-    replyTo: formattedResponse.replyTo,
-    type: formattedResponse.type
-  });
 }
 
 function sendError(ws, client, message, details = null) {

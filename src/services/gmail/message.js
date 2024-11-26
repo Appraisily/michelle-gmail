@@ -6,6 +6,8 @@ import { extractImageAttachments } from './attachments.js';
 
 const gmail = google.gmail('v1');
 const processedMessages = new Set();
+const MAX_THREAD_DEPTH = 10;
+const MESSAGE_BATCH_SIZE = 5;
 
 async function getThreadMessages(auth, threadId) {
   try {
@@ -16,51 +18,89 @@ async function getThreadMessages(auth, threadId) {
       format: 'full'
     });
 
-    const messages = thread.data.messages.map(message => {
-      const headers = message.payload.headers;
-      const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
-      const content = parseEmailContent(message.payload);
-      const timestamp = parseInt(message.internalDate);
-      
-      return {
-        from,
-        content,
-        timestamp,
-        date: new Date(timestamp).toISOString(),
-        isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL)
-      };
-    });
+    // Sort messages by date and limit thread depth
+    const messages = thread.data.messages
+      .map(message => {
+        const headers = message.payload.headers;
+        const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
+        const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value;
+        const content = parseEmailContent(message.payload);
+        const timestamp = parseInt(message.internalDate);
+        
+        return {
+          id: message.id,
+          from,
+          subject,
+          content,
+          timestamp,
+          date: new Date(timestamp).toISOString(),
+          isIncoming: !from.includes(process.env.GMAIL_USER_EMAIL),
+          labels: message.labelIds || []
+        };
+      })
+      .sort((a, b) => b.timestamp - a.timestamp) // Sort newest first
+      .slice(0, MAX_THREAD_DEPTH); // Keep only most recent messages
 
     logger.info('Thread messages retrieved', {
       threadId,
-      messageCount: messages.length
+      messageCount: messages.length,
+      newestMessage: messages[0]?.date,
+      oldestMessage: messages[messages.length - 1]?.date
     });
 
     return messages;
   } catch (error) {
-    logger.error('Error fetching thread:', error);
+    logger.error('Error fetching thread:', {
+      error: error.message,
+      threadId,
+      stack: error.stack
+    });
     return null;
   }
 }
 
-function parseEmailContent(payload) {
+function parseEmailContent(payload, depth = 0) {
+  const MAX_DEPTH = 5;
   let content = '';
-  
-  if (payload.mimeType === 'text/plain' && payload.body.data) {
-    content = Buffer.from(payload.body.data, 'base64').toString();
-  } else if (payload.parts) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body.data) {
-        content = Buffer.from(part.body.data, 'base64').toString();
-        break;
+
+  try {
+    if (depth > MAX_DEPTH) {
+      return content;
+    }
+
+    if (payload.mimeType === 'text/plain' && payload.body.data) {
+      content = Buffer.from(payload.body.data, 'base64').toString();
+    } else if (payload.parts) {
+      for (const part of payload.parts) {
+        if (part.mimeType === 'text/plain' && part.body.data) {
+          content += Buffer.from(part.body.data, 'base64').toString();
+        } else if (part.parts) {
+          content += parseEmailContent(part, depth + 1);
+        }
       }
     }
+
+    // Clean up content
+    content = content
+      .replace(/\r\n/g, '\n')
+      .replace(/^\s+|\s+$/g, '')
+      .replace(/[\n\s]+$/g, '\n');
+
+    return content;
+  } catch (error) {
+    logger.error('Error parsing email content:', {
+      error: error.message,
+      mimeType: payload.mimeType,
+      hasBody: !!payload.body,
+      hasParts: !!payload.parts,
+      depth
+    });
+    return content;
   }
-  
-  return content;
 }
 
 export async function processMessage(auth, messageId) {
+  // Skip if message was already processed
   if (processedMessages.has(messageId)) {
     logger.debug('Skipping already processed message', { messageId });
     return true;
@@ -79,6 +119,7 @@ export async function processMessage(auth, messageId) {
     const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
     const content = parseEmailContent(message.data.payload);
     const threadId = message.data.threadId;
+    const labels = message.data.labelIds || [];
 
     // Extract email address
     const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
@@ -88,20 +129,24 @@ export async function processMessage(auth, messageId) {
       messageId: message.data.id,
       threadId,
       subject,
-      from
+      from,
+      labels,
+      timestamp: new Date(parseInt(message.data.internalDate)).toISOString()
     });
 
     // Get thread messages for context
     const threadMessages = await getThreadMessages(auth, threadId);
 
-    // Only process if this is the latest message
+    // Only process if this is the latest message in thread
     const isLatestMessage = threadMessages && 
-      threadMessages[threadMessages.length - 1].timestamp === parseInt(message.data.internalDate);
+      threadMessages[0].id === message.data.id;
 
     if (!isLatestMessage) {
       logger.info('Skipping non-latest message in thread', {
         messageId,
-        threadId
+        threadId,
+        messageDate: new Date(parseInt(message.data.internalDate)).toISOString(),
+        latestDate: threadMessages?.[0].date
       });
       processedMessages.add(messageId);
       return true;
@@ -120,6 +165,7 @@ export async function processMessage(auth, messageId) {
 
     // Log to sheets
     await logEmailProcessing({
+      timestamp: new Date().toISOString(),
       messageId: message.data.id,
       sender: from,
       subject,
@@ -127,7 +173,9 @@ export async function processMessage(auth, messageId) {
       requiresReply: result.requiresReply,
       reply: result.generatedReply || 'No reply needed',
       reason: result.reason,
-      classification: result.classification
+      classification: result.classification,
+      threadId,
+      labels: labels.join(', ')
     });
 
     // Mark message as processed
@@ -147,51 +195,5 @@ export async function processMessage(auth, messageId) {
       messageId
     });
     return false;
-  }
-}
-
-export async function sendEmail(to, subject, body, threadId = null) {
-  try {
-    const auth = await getGmailAuth();
-    
-    // Create email content
-    const email = [
-      'Content-Type: text/html; charset=utf-8',
-      'MIME-Version: 1.0',
-      `To: ${to}`,
-      'From: Michelle Thompson <info@appraisily.com>',
-      `Subject: ${subject}`,
-      '',
-      body
-    ].join('\n');
-
-    const encodedEmail = Buffer.from(email).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
-
-    const params = {
-      auth,
-      userId: 'me',
-      requestBody: {
-        raw: encodedEmail,
-        ...(threadId && { threadId })
-      }
-    };
-
-    const result = await gmail.users.messages.send(params);
-
-    logger.info('Email sent successfully', {
-      to,
-      subject,
-      messageId: result.data.id,
-      threadId: result.data.threadId
-    });
-
-    return {
-      success: true,
-      messageId: result.data.id,
-      threadId: result.data.threadId
-    };
-  } catch (error) {
-    logger.error('Failed to send email:', error);
-    throw error;
   }
 }
