@@ -5,6 +5,9 @@ import { processMessage } from './message.js';
 
 const gmail = google.gmail('v1');
 let lastHistoryId = null;
+const processedHistoryIds = new Set();
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second
 
 async function initializeHistoryId(auth) {
   try {
@@ -14,11 +17,114 @@ async function initializeHistoryId(auth) {
     });
     
     lastHistoryId = profile.data.historyId;
-    logger.info('Initialized history ID', { historyId: lastHistoryId });
+    logger.info('Initialized history ID', { 
+      historyId: lastHistoryId,
+      email: profile.data.emailAddress 
+    });
     
     return lastHistoryId;
   } catch (error) {
-    logger.error('Failed to initialize history ID:', error);
+    logger.error('Failed to initialize history ID:', {
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
+  }
+}
+
+async function fetchHistory(auth, startHistoryId, pageToken = null) {
+  try {
+    const params = {
+      auth,
+      userId: 'me',
+      startHistoryId,
+      maxResults: 100,
+      historyTypes: ['messageAdded'],
+      ...(pageToken && { pageToken })
+    };
+
+    logger.debug('Fetching history with params', {
+      startHistoryId,
+      pageToken,
+      maxResults: params.maxResults
+    });
+
+    const history = await gmail.users.history.list(params);
+    return history.data;
+  } catch (error) {
+    // Handle specific error cases
+    if (error.code === 404) {
+      logger.warn('History ID not found, reinitializing', { startHistoryId });
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function processHistoryItem(auth, item, retryCount = 0) {
+  try {
+    if (!item.messages || processedHistoryIds.has(item.id)) {
+      return;
+    }
+
+    logger.info('Processing history item', {
+      historyId: item.id,
+      messageCount: item.messages.length
+    });
+
+    // Process messages in parallel with Promise.all
+    const results = await Promise.all(
+      item.messages.map(async (message) => {
+        try {
+          logger.debug('Processing message', {
+            messageId: message.id,
+            historyId: item.id
+          });
+          
+          return await processMessage(auth, message.id);
+        } catch (error) {
+          logger.error('Error processing message:', {
+            error: error.message,
+            messageId: message.id,
+            historyId: item.id
+          });
+          return false;
+        }
+      })
+    );
+
+    // Track processed history ID
+    processedHistoryIds.add(item.id);
+
+    // Maintain reasonable size for tracking set
+    if (processedHistoryIds.size > 1000) {
+      const oldestIds = Array.from(processedHistoryIds).slice(0, 500);
+      oldestIds.forEach(id => processedHistoryIds.delete(id));
+    }
+
+    // Check if any messages failed
+    const failedCount = results.filter(r => !r).length;
+    if (failedCount > 0) {
+      logger.warn('Some messages failed processing', {
+        historyId: item.id,
+        totalMessages: item.messages.length,
+        failedCount
+      });
+    }
+
+    return failedCount === 0;
+  } catch (error) {
+    if (retryCount < MAX_RETRIES) {
+      logger.warn('Retrying history item processing', {
+        historyId: item.id,
+        retryCount,
+        error: error.message
+      });
+      
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      return processHistoryItem(auth, item, retryCount + 1);
+    }
+    
     throw error;
   }
 }
@@ -27,7 +133,7 @@ export async function handleWebhook(data) {
   try {
     const auth = await getGmailAuth();
     
-    // Decode and validate Pub/Sub message
+    // Validate and decode Pub/Sub message
     if (!data.message?.data) {
       throw new Error('Invalid Pub/Sub message format');
     }
@@ -49,44 +155,33 @@ export async function handleWebhook(data) {
       lastHistoryId = await initializeHistoryId(auth);
     }
 
-    // Fetch history since last processed ID
-    logger.info('Fetching history', { startHistoryId: lastHistoryId });
-
-    const history = await gmail.users.history.list({
-      auth,
-      userId: 'me',
-      startHistoryId: lastHistoryId,
-      maxResults: 100, // Limit results per page
-      historyTypes: ['messageAdded'] // Only get new messages
-    });
-
-    if (!history.data.history) {
-      logger.info('No new history to process');
-      return;
-    }
-
-    // Process each history item
-    for (const item of history.data.history) {
-      logger.info('Processing history item', {
-        historyId: item.id,
-        messageCount: item.messages?.length
+    // Fetch and process history with pagination
+    let pageToken = null;
+    do {
+      logger.info('Fetching history page', { 
+        startHistoryId: lastHistoryId,
+        pageToken 
       });
 
-      if (!item.messages) continue;
+      const historyData = await fetchHistory(auth, lastHistoryId, pageToken);
+      
+      // Handle case where history ID is invalid/expired
+      if (!historyData) {
+        lastHistoryId = await initializeHistoryId(auth);
+        continue;
+      }
 
-      // Process messages in parallel
-      const processPromises = item.messages.map(message => {
-        logger.debug('Processing message', {
-          messageId: message.id,
-          historyId: item.id
-        });
-        return processMessage(auth, message.id);
-      });
+      if (historyData.history) {
+        // Process each history item
+        for (const item of historyData.history) {
+          await processHistoryItem(auth, item);
+        }
+      }
 
-      await Promise.all(processPromises);
-    }
+      pageToken = historyData.nextPageToken;
+    } while (pageToken);
 
-    // Update lastHistoryId only after successful processing
+    // Update lastHistoryId after successful processing
     lastHistoryId = decodedData.historyId;
     logger.info('Updated history ID', { historyId: lastHistoryId });
 

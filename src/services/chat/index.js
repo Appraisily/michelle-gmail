@@ -38,6 +38,17 @@ export function initializeChatService(server) {
         const message = JSON.parse(data);
         const client = clients.get(ws);
 
+        // Log the received message with detailed structure
+        logger.info('Received chat message', {
+          clientId: client.id,
+          messageType: message.type,
+          content: message.content,
+          context: message.context,
+          images: message.images?.length || 0,
+          email: message.email,
+          timestamp: new Date().toISOString()
+        });
+
         // Handle ping messages immediately without processing
         if (message.type === 'ping') {
           ws.send(JSON.stringify({
@@ -51,6 +62,10 @@ export function initializeChatService(server) {
         // Rate limiting check
         const now = Date.now();
         if (now - client.lastMessage < 1000) { // 1 second cooldown
+          logger.warn('Rate limit exceeded', {
+            clientId: client.id,
+            timeSinceLastMessage: now - client.lastMessage
+          });
           ws.send(JSON.stringify({
             type: 'error',
             error: 'Rate limit exceeded',
@@ -62,7 +77,31 @@ export function initializeChatService(server) {
 
         // Process non-ping messages
         if (message.type === 'message') {
+          // Log the data being sent to OpenAI
+          logger.info('Sending to OpenAI for processing', {
+            clientId: client.id,
+            content: message.content,
+            context: message.context ? [{
+              content: message.context,
+              isIncoming: true
+            }] : null,
+            images: message.images?.map(img => ({
+              type: img.type,
+              hasData: !!img.data
+            })) || null,
+            email: message.email || 'chat-user',
+            timestamp: new Date().toISOString()
+          });
+
           const response = await classifyAndProcessChat(message, client.id);
+          
+          // Log the OpenAI response
+          logger.info('Received OpenAI response', {
+            clientId: client.id,
+            response,
+            timestamp: new Date().toISOString()
+          });
+
           ws.send(JSON.stringify({
             type: 'response',
             ...response,
@@ -71,7 +110,12 @@ export function initializeChatService(server) {
           recordMetric('chat_messages_processed', 1);
         }
       } catch (error) {
-        logger.error('Error processing chat message:', error);
+        logger.error('Error processing chat message:', {
+          error: error.message,
+          stack: error.stack,
+          clientId: clients.get(ws)?.id,
+          rawData: data.toString()
+        });
         recordMetric('chat_processing_errors', 1);
         
         ws.send(JSON.stringify({
@@ -84,8 +128,12 @@ export function initializeChatService(server) {
 
     // Handle client disconnect
     ws.on('close', () => {
+      const client = clients.get(ws);
       clients.delete(ws);
-      logger.info('Chat client disconnected', { clientId });
+      logger.info('Chat client disconnected', { 
+        clientId: client?.id,
+        connectedDuration: Date.now() - client?.lastMessage
+      });
       recordMetric('chat_disconnections', 1);
     });
 
