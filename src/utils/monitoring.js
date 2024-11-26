@@ -1,10 +1,29 @@
 import monitoring from '@google-cloud/monitoring';
 import { logger } from './logger.js';
+import pThrottle from 'p-throttle';
+import LRUCache from 'lru-cache';
 
 const client = new monitoring.MetricServiceClient();
 
-export async function recordMetric(name, value = 1) {
+// Cache metric writes to prevent duplicates
+const metricsCache = new LRUCache({
+  max: 1000,
+  ttl: 1000 * 60 // 1 minute
+});
+
+// Throttle metric recording to max 1 per second per metric
+const throttledRecord = pThrottle({
+  limit: 1,
+  interval: 1000
+});
+
+export const recordMetric = throttledRecord(async (name, value = 1) => {
   try {
+    const cacheKey = `${name}-${Date.now()}`;
+    if (metricsCache.has(cacheKey)) {
+      return;
+    }
+
     const projectPath = client.projectPath(process.env.PROJECT_ID);
     const now = new Date();
 
@@ -38,8 +57,9 @@ export async function recordMetric(name, value = 1) {
       timeSeries: [timeSeriesData]
     });
 
+    metricsCache.set(cacheKey, true);
     logger.debug(`Metric ${name} recorded`, { value });
   } catch (error) {
     logger.error(`Error recording metric ${name}:`, error);
   }
-}
+});
