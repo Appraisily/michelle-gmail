@@ -64,14 +64,19 @@ export async function setupGmailWatch() {
       historyId: profile.data.historyId
     });
 
-    // Always stop existing watch first
-    const watchStopped = await stopExistingWatch(auth);
-    if (!watchStopped) {
-      throw new Error('Failed to stop existing watch');
-    }
+    // Always stop and recreate watch, regardless of current status
+    logger.info('Forcing watch renewal during setup');
+    await stopExistingWatch(auth);
 
     // Create new watch
-    return await createNewWatch(auth);
+    const watchData = await createNewWatch(auth);
+    
+    logger.info('Watch setup completed with forced renewal', {
+      historyId: watchData.historyId,
+      expiration: new Date(parseInt(watchData.expiration)).toISOString()
+    });
+
+    return watchData;
   } catch (error) {
     logger.error('Watch setup failed:', error);
     throw error;
