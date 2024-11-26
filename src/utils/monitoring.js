@@ -1,26 +1,30 @@
 import monitoring from '@google-cloud/monitoring';
-import { logger } from './logger.js';
 import pThrottle from 'p-throttle';
 import { LRUCache } from 'lru-cache';
+import { logger } from './logger.js';
 
 const client = new monitoring.MetricServiceClient();
 
-// Cache metric writes to prevent duplicates
+// Cache metric writes to prevent duplicates within a time window
 const metricsCache = new LRUCache({
-  max: 1000,
-  ttl: 1000 * 60 // 1 minute
+  max: 1000, // Store up to 1000 metric entries
+  ttl: 1000 * 60 // Cache for 1 minute
 });
 
-// Throttle metric recording to max 1 per second per metric
+// Throttle metric recording to max 1 per minute per metric name
 const throttledRecord = pThrottle({
   limit: 1,
-  interval: 1000
+  interval: 60 * 1000 // 1 minute
 });
 
 export const recordMetric = throttledRecord(async (name, value = 1) => {
   try {
-    const cacheKey = `${name}-${Date.now()}`;
+    // Create cache key using metric name and current minute
+    const cacheKey = `${name}-${Math.floor(Date.now() / 60000)}`;
+    
+    // Skip if already recorded in this minute
     if (metricsCache.has(cacheKey)) {
+      logger.debug('Skipping duplicate metric', { name, value, cacheKey });
       return;
     }
 
@@ -57,9 +61,20 @@ export const recordMetric = throttledRecord(async (name, value = 1) => {
       timeSeries: [timeSeriesData]
     });
 
-    logger.debug(`Metric ${name} recorded`, { value });
+    // Cache the metric write
     metricsCache.set(cacheKey, true);
+
+    logger.debug('Metric recorded successfully', { 
+      name, 
+      value,
+      timestamp: now.toISOString()
+    });
+
   } catch (error) {
-    logger.error(`Error recording metric ${name}:`, error);
+    logger.error('Error recording metric:', {
+      error: error.message,
+      metric: name,
+      value
+    });
   }
 });

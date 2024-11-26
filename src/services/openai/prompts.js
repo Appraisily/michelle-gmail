@@ -1,3 +1,4 @@
+import { logger } from '../../utils/logger.js';
 import { analysisPrompts } from './prompts/analysis.js';
 import { responsePrompts } from './prompts/response.js';
 
