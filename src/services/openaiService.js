@@ -93,7 +93,7 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
     
     // First, analyze the email
     const analysisResponse = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4o-mini", //always use gpt-4o-mini as model for analysisResponse
       messages: [
         {
           role: "system",
@@ -175,7 +175,7 @@ export async function classifyAndProcessEmail(emailContent, senderEmail, threadM
 
     // Generate response if needed
     const responseGeneration = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4o", //always use gpt-4o as model responseGeneration
       messages: [
         {
           role: "system",
