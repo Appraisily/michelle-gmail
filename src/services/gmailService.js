@@ -308,7 +308,7 @@ export async function handleWebhook(data) {
       auth,
       userId: 'me',
       startHistoryId: lastHistoryId,
-      historyTypes: ['messageAdded', 'messageModified'] // Only process new/modified messages
+      labelId: 'INBOX' // Only process inbox messages
     });
 
     if (!history.data.history) {
@@ -335,6 +335,12 @@ export async function handleWebhook(data) {
     // Update lastHistoryId after successful processing
     lastHistoryId = decodedData.historyId;
     logger.info('Updated history ID', { historyId: lastHistoryId });
+
+    // Acknowledge successful processing
+    logger.info('Pub/Sub message acknowledged', {
+      messageId: data.message.messageId,
+      subscription: data.subscription
+    });
 
   } catch (error) {
     logger.error('Webhook processing failed:', error);
