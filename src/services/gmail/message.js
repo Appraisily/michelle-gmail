@@ -169,14 +169,16 @@ export async function processMessage(auth, messageId) {
       return true;
     }
 
-    // Extract image attachments
+    // Extract and validate image attachments
     const imageAttachments = await extractImageAttachments(auth, message.data);
+    const hasValidImages = imageAttachments.length > 0;
 
     logger.debug('Processing message with OpenAI', {
       messageId,
       hasThread: !!threadMessages,
       threadLength: threadMessages?.length,
-      hasImages: imageAttachments.length > 0
+      hasImages: hasValidImages,
+      imageCount: imageAttachments.length
     });
 
     // Process with OpenAI
@@ -184,7 +186,7 @@ export async function processMessage(auth, messageId) {
       content,
       senderEmail,
       threadMessages,
-      imageAttachments
+      hasValidImages ? imageAttachments : null
     );
 
     // Log to sheets
@@ -193,7 +195,7 @@ export async function processMessage(auth, messageId) {
       messageId: message.data.id,
       sender: from,
       subject,
-      hasImages: imageAttachments.length > 0,
+      hasImages: hasValidImages,
       requiresReply: result.requiresReply,
       reply: result.generatedReply || 'No reply needed',
       reason: result.reason,
