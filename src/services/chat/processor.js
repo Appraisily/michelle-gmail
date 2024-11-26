@@ -9,6 +9,14 @@ export async function classifyAndProcessChat(message, clientId) {
       messageType: message.type
     });
 
+    // Handle ping messages
+    if (message.type === 'ping') {
+      return {
+        type: 'pong',
+        timestamp: new Date().toISOString()
+      };
+    }
+
     // Process message using same pipeline as email
     const result = await classifyAndProcessEmail(
       message.content,
