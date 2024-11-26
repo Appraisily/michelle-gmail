@@ -61,12 +61,7 @@ Use the company knowledge base: ${JSON.stringify(companyKnowledge)}
 `.trim();
 
     // Debug log the final prompt
-    logger.debug('Generated analysis prompt', {
-      promptLength: prompt.length,
-      hasEndpoints: endpointsInfo !== 'No endpoints available',
-      hasAuth: authInfo !== 'No authentication required',
-      hasRateLimits: rateInfo !== 'No rate limiting'
-    });
+    logger.debug('Generated analysis prompt:', { prompt });
 
     return prompt;
   },

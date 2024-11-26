@@ -1,11 +1,15 @@
 import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
-import { classifyAndProcessEmail } from '../openai/index.js';
-import { dataHubClient } from '../dataHub/client.js';
+import { getOpenAIClient } from '../openai/client.js';
+import { v4 as uuidv4 } from 'uuid';
+import { companyKnowledge } from '../../data/companyKnowledge.js';
 
-const MAX_CONTEXT_LENGTH = 2000; // Maximum length for context to prevent token limits
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
+const MAX_CONTEXT_LENGTH = 2000;
+
+// Store conversation contexts
+const conversationContexts = new Map();
 
 function truncateContext(context) {
   if (!context || context.length <= MAX_CONTEXT_LENGTH) {
@@ -14,99 +18,101 @@ function truncateContext(context) {
   return context.slice(context.length - MAX_CONTEXT_LENGTH);
 }
 
-function formatMessageForOpenAI(message) {
-  try {
-    // Validate required fields
-    if (!message.content) {
-      throw new Error('Message content is required');
-    }
-
-    // Format context if available
-    const context = message.context ? truncateContext(message.context) : null;
-
-    // Format images if available
-    const images = message.images?.map(img => ({
-      type: 'image_url',
-      image_url: {
-        url: `data:${img.mimeType};base64,${img.buffer.toString('base64')}`
-      }
-    })) || null;
-
-    // Create formatted message
-    const formattedMessage = {
-      content: message.content.trim(),
-      ...(context && { context }),
-      ...(images && { images }),
-      email: message.email || 'chat-user',
-      timestamp: message.timestamp || new Date().toISOString()
-    };
-
-    logger.debug('Formatted message for OpenAI', {
-      hasContent: !!formattedMessage.content,
-      hasContext: !!formattedMessage.context,
-      imageCount: formattedMessage.images?.length || 0,
-      email: formattedMessage.email
-    });
-
-    return formattedMessage;
-  } catch (error) {
-    logger.error('Error formatting message:', {
-      error: error.message,
-      stack: error.stack,
-      originalMessage: message
-    });
-    throw error;
+function getConversationContext(clientId) {
+  if (!conversationContexts.has(clientId)) {
+    conversationContexts.set(clientId, []);
   }
+  return conversationContexts.get(clientId);
 }
 
-async function fetchApiInfo() {
-  try {
-    const apiInfo = await dataHubClient.fetchEndpoints();
-    logger.debug('Fetched API info', {
-      endpointCount: apiInfo.endpoints?.length,
-      hasAuthentication: !!apiInfo.authentication,
-      hasRateLimiting: !!apiInfo.rateLimiting
-    });
-    return apiInfo;
-  } catch (error) {
-    logger.error('Error fetching API info:', error);
-    return null;
+function updateConversationContext(clientId, role, content, messageId) {
+  const context = getConversationContext(clientId);
+  context.push({ 
+    role, 
+    content, 
+    messageId,
+    timestamp: new Date().toISOString() 
+  });
+  
+  // Keep only last 10 messages for context
+  if (context.length > 10) {
+    context.shift();
   }
 }
 
 async function processWithRetry(message, clientId, retryCount = 0) {
   try {
-    const formattedMessage = formatMessageForOpenAI(message);
-    const apiInfo = await fetchApiInfo();
+    const openai = await getOpenAIClient();
+    const context = getConversationContext(clientId);
 
-    const result = await classifyAndProcessEmail(
-      formattedMessage.content,
-      formattedMessage.email,
-      formattedMessage.context ? [{ content: formattedMessage.context, isIncoming: true }] : null,
-      formattedMessage.images,
-      apiInfo
-    );
+    // Format conversation history for OpenAI
+    const messages = [
+      {
+        role: "system",
+        content: `You are Michelle Thompson, a professional customer service representative for Appraisily, a leading art and antique appraisal firm.
+                 Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
+                 
+                 Guidelines:
+                 - Be friendly and professional
+                 - Ask clarifying questions when needed
+                 - Provide accurate information about our services
+                 - Guide customers towards appropriate appraisal services
+                 - Never provide specific valuations in chat
+                 - Maintain conversation context
+                 - Keep responses concise but helpful`
+      },
+      ...context.map(msg => ({
+        role: msg.role === "assistant" ? "assistant" : "user",
+        content: msg.content
+      })),
+      {
+        role: "user",
+        content: message.content
+      }
+    ];
 
-    logger.info('Chat message processed successfully', {
+    logger.debug('Sending chat request to OpenAI', {
       clientId,
-      messageId: result.messageId,
-      classification: result.classification?.intent,
-      hasReply: !!result.generatedReply
+      messageCount: messages.length,
+      latestMessage: message.content
+    });
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages,
+      temperature: 0.7,
+      max_tokens: 500
+    });
+
+    const reply = completion.choices[0].message.content;
+    const responseId = uuidv4();
+
+    // Update conversation context
+    updateConversationContext(clientId, "user", message.content, message.id);
+    updateConversationContext(clientId, "assistant", reply, responseId);
+
+    logger.info('Chat response generated', {
+      clientId,
+      messageId: responseId,
+      replyTo: message.id,
+      contextLength: context.length
     });
 
     recordMetric('chat_responses_generated', 1);
 
     return {
-      messageId: message.id || uuidv4(),
-      reply: result.generatedReply,
-      classification: result.classification,
-      imageAnalysis: result.imageAnalysis,
+      type: 'response',
+      clientId,
+      conversationId: message.conversationId,
+      messageId: responseId,
+      replyTo: message.id,
+      content: reply,
       timestamp: new Date().toISOString()
     };
 
   } catch (error) {
     if (retryCount < MAX_RETRIES) {
-      logger.warn('Retrying chat message processing', {
+      logger.warn('Retrying chat processing', {
         clientId,
         retryCount,
         error: error.message
@@ -116,7 +122,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       return processWithRetry(message, clientId, retryCount + 1);
     }
 
-    logger.error('Chat processing failed after retries:', {
+    logger.error('Chat processing failed after retries', {
       error: error.message,
       stack: error.stack,
       clientId,
@@ -128,24 +134,25 @@ async function processWithRetry(message, clientId, retryCount = 0) {
   }
 }
 
-export async function classifyAndProcessChat(message, clientId) {
+export async function processChat(message, clientId) {
   try {
     logger.info('Processing chat message', {
       clientId,
       messageType: message.type,
       hasContent: !!message.content,
-      hasContext: !!message.context,
-      hasImages: !!message.images
+      conversationId: message.conversationId
     });
 
     // Handle ping messages
     if (message.type === 'ping') {
       return {
         type: 'pong',
+        clientId,
         timestamp: new Date().toISOString()
       };
     }
 
+    // Process chat message
     return await processWithRetry(message, clientId);
 
   } catch (error) {
@@ -159,3 +166,15 @@ export async function classifyAndProcessChat(message, clientId) {
     throw error;
   }
 }
+
+// Clean up old conversations periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [clientId, context] of conversationContexts.entries()) {
+    const lastMessage = context[context.length - 1];
+    if (lastMessage && now - new Date(lastMessage.timestamp).getTime() > 30 * 60 * 1000) { // 30 minutes
+      conversationContexts.delete(clientId);
+      logger.info('Cleaned up inactive conversation', { clientId });
+    }
+  }
+}, 5 * 60 * 1000); // Check every 5 minutes
