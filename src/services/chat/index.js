@@ -38,6 +38,16 @@ export function initializeChatService(server) {
         const message = JSON.parse(data);
         const client = clients.get(ws);
 
+        // Handle ping messages immediately without processing
+        if (message.type === 'ping') {
+          ws.send(JSON.stringify({
+            type: 'pong',
+            clientId: client.id,
+            timestamp: new Date().toISOString()
+          }));
+          return;
+        }
+
         // Rate limiting check
         const now = Date.now();
         if (now - client.lastMessage < 1000) { // 1 second cooldown
@@ -50,16 +60,16 @@ export function initializeChatService(server) {
         }
         client.lastMessage = now;
 
-        // Process message
-        const response = await classifyAndProcessChat(message, clientId);
-        
-        ws.send(JSON.stringify({
-          type: 'response',
-          ...response,
-          timestamp: new Date().toISOString()
-        }));
-
-        recordMetric('chat_messages_processed', 1);
+        // Process non-ping messages
+        if (message.type === 'message') {
+          const response = await classifyAndProcessChat(message, client.id);
+          ws.send(JSON.stringify({
+            type: 'response',
+            ...response,
+            timestamp: new Date().toISOString()
+          }));
+          recordMetric('chat_messages_processed', 1);
+        }
       } catch (error) {
         logger.error('Error processing chat message:', error);
         recordMetric('chat_processing_errors', 1);

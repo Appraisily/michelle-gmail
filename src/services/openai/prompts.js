@@ -7,12 +7,12 @@ export const systemPrompts = {
     logger.debug('Building analysis prompt with', {
       hasCompanyKnowledge: !!companyKnowledge,
       hasApiInfo: !!apiInfo,
-      endpointCount: apiInfo?.endpoints?.length,
+      endpointCount: apiInfo?.endpoints?.length || 0,
       hasAuthentication: !!apiInfo?.authentication,
       hasRateLimiting: !!apiInfo?.rateLimiting
     });
 
-    const endpointsInfo = apiInfo.endpoints 
+    const endpointsInfo = apiInfo?.endpoints 
       ? apiInfo.endpoints.map(e => `${e.method} ${e.path}
 Description: ${e.description}
 Parameters: ${e.parameters.map(p => `\n  - ${p.name}: ${p.description}${p.required ? ' (Required)' : ''}`).join('')}
@@ -20,13 +20,13 @@ Example Response: ${JSON.stringify(e.responseExample, null, 2)}
 `).join('\n\n')
       : 'No endpoints available';
 
-    const authInfo = apiInfo.authentication
+    const authInfo = apiInfo?.authentication
       ? `Type: ${apiInfo.authentication.type}
 Header: ${apiInfo.authentication.headerName}
 ${apiInfo.authentication.description}`
       : 'No authentication required';
 
-    const rateInfo = apiInfo.rateLimiting
+    const rateInfo = apiInfo?.rateLimiting
       ? `- ${apiInfo.rateLimiting.requestsPerWindow} requests per ${apiInfo.rateLimiting.windowMinutes} minutes
 - Error ${apiInfo.rateLimiting.errorCode}: ${apiInfo.rateLimiting.errorMessage}`
       : 'No rate limiting';
