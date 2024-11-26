@@ -1,8 +1,9 @@
 import express from 'express';
 import http from 'http';
 import { logger } from './utils/logger.js';
-import { setupGmailWatch, renewWatch } from './services/gmailWatch.js';
-import { handleWebhook, sendEmail } from './services/gmailService.js';
+import { setupGmailWatch, renewWatch } from './services/gmail/watch.js';
+import { handleWebhook } from './services/gmail/webhook.js';
+import { sendEmail } from './services/gmail/message.js';
 import { getSecrets } from './utils/secretManager.js';
 import { initializeChatService } from './services/chat/index.js';
 
@@ -76,7 +77,6 @@ app.post('/api/gmail/webhook', async (req, res) => {
     await handleWebhook(req.body);
 
     // Acknowledge the message by sending 200 status
-    // Cloud Run automatically acknowledges Pub/Sub messages when returning 2xx status
     res.status(200).json({ 
       status: 'success',
       messageId: message.messageId,
@@ -89,7 +89,6 @@ app.post('/api/gmail/webhook', async (req, res) => {
     });
   } catch (error) {
     logger.error('Webhook error:', error);
-    // Return non-2xx status to nack the message and trigger a retry
     res.status(500).json({ error: 'Processing failed' });
   }
 });
@@ -137,7 +136,8 @@ app.get('/health', (req, res) => {
 
 async function startServer() {
   try {
-    // Initial Gmail watch setup
+    // Force Gmail watch setup on startup
+    logger.info('Starting server with forced Gmail watch setup');
     await setupGmailWatch();
     
     server.listen(PORT, () => {
