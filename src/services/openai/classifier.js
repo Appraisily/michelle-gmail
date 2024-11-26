@@ -3,6 +3,7 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { systemPrompts } from './prompts.js';
 import { dataHubFunctions } from './functions.js';
 import { getOpenAIClient } from './client.js';
+import { dataHubClient } from '../dataHub/client.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o-mini';
@@ -102,12 +103,22 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
 
+    // Ensure apiInfo has the correct structure
+    const formattedApiInfo = apiInfo ? {
+      endpoints: Array.isArray(apiInfo.endpoints) ? apiInfo.endpoints : [],
+      authentication: apiInfo.authentication || {},
+      rateLimiting: apiInfo.rateLimiting || {}
+    } : {
+      endpoints: [],
+      authentication: {},
+      rateLimiting: {}
+    };
+
     logger.debug('Preparing OpenAI request', {
       model: MODEL,
-      systemPrompt: systemPrompts.analysis(companyKnowledge, apiInfo),
       threadContext: !!threadContext,
       fullContextLength: fullContext.length,
-      apiEndpoints: apiInfo?.endpoints?.length
+      apiEndpoints: formattedApiInfo.endpoints.length
     });
 
     // Initial classification
@@ -116,7 +127,7 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
       messages: [
         {
           role: "system",
-          content: systemPrompts.analysis(companyKnowledge, apiInfo)
+          content: systemPrompts.analysis(companyKnowledge, formattedApiInfo)
         },
         {
           role: "user",

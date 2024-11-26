@@ -5,6 +5,7 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { classifyAndProcessChat } from './processor.js';
 
 const HEARTBEAT_INTERVAL = 30000;
+const RATE_LIMIT_WINDOW = 1000; // 1 second between messages
 const clients = new Map();
 
 export function initializeChatService(server) {
@@ -19,18 +20,27 @@ export function initializeChatService(server) {
       id: clientId,
       ip: clientIp,
       isAlive: true,
-      lastMessage: Date.now()
+      lastMessage: Date.now(),
+      messageCount: 0
     });
 
-    logger.info('New chat client connected', { clientId, ip: clientIp });
+    logger.info('New chat client connected', { 
+      clientId, 
+      ip: clientIp,
+      timestamp: new Date().toISOString()
+    });
+    
     recordMetric('chat_connections', 1);
 
     // Send welcome message
-    ws.send(JSON.stringify({
+    const welcomeMessage = {
       type: 'connection_established',
       clientId,
+      message: 'Welcome to Appraisily Chat! How can I help you today?',
       timestamp: new Date().toISOString()
-    }));
+    };
+
+    ws.send(JSON.stringify(welcomeMessage));
 
     // Handle incoming messages
     ws.on('message', async (data) => {
@@ -38,18 +48,14 @@ export function initializeChatService(server) {
         const message = JSON.parse(data);
         const client = clients.get(ws);
 
-        // Log the received message with detailed structure
         logger.info('Received chat message', {
           clientId: client.id,
           messageType: message.type,
           content: message.content,
-          context: message.context,
-          images: message.images?.length || 0,
-          email: message.email,
           timestamp: new Date().toISOString()
         });
 
-        // Handle ping messages immediately without processing
+        // Handle ping messages immediately
         if (message.type === 'ping') {
           ws.send(JSON.stringify({
             type: 'pong',
@@ -61,45 +67,52 @@ export function initializeChatService(server) {
 
         // Rate limiting check
         const now = Date.now();
-        if (now - client.lastMessage < 1000) { // 1 second cooldown
+        if (now - client.lastMessage < RATE_LIMIT_WINDOW) {
           logger.warn('Rate limit exceeded', {
             clientId: client.id,
             timeSinceLastMessage: now - client.lastMessage
           });
+          
           ws.send(JSON.stringify({
             type: 'error',
-            error: 'Rate limit exceeded',
+            error: 'Please wait a moment before sending another message',
             timestamp: new Date().toISOString()
           }));
           return;
         }
-        client.lastMessage = now;
 
-        // Process non-ping messages
+        // Update client state
+        client.lastMessage = now;
+        client.messageCount++;
+
+        // Process chat messages
         if (message.type === 'message') {
-          // Log the data being sent to OpenAI
-          logger.info('Sending to OpenAI for processing', {
-            clientId: client.id,
+          // Validate message structure
+          if (!message.content) {
+            throw new Error('Message content is required');
+          }
+
+          // Format message for OpenAI processing
+          const formattedMessage = {
             content: message.content,
-            context: message.context ? [{
-              content: message.context,
-              isIncoming: true
-            }] : null,
-            images: message.images?.map(img => ({
-              type: img.type,
-              hasData: !!img.data
-            })) || null,
-            email: message.email || 'chat-user',
+            context: message.context || null,
+            images: message.images || null,
+            email: message.email || null,
             timestamp: new Date().toISOString()
+          };
+
+          logger.debug('Processing chat message', {
+            clientId: client.id,
+            message: formattedMessage
           });
 
-          const response = await classifyAndProcessChat(message, client.id);
+          const response = await classifyAndProcessChat(formattedMessage, client.id);
           
-          // Log the OpenAI response
-          logger.info('Received OpenAI response', {
+          logger.info('Chat response generated', {
             clientId: client.id,
-            response,
-            timestamp: new Date().toISOString()
+            messageId: response.messageId,
+            hasReply: !!response.reply,
+            classification: response.classification
           });
 
           ws.send(JSON.stringify({
@@ -107,20 +120,23 @@ export function initializeChatService(server) {
             ...response,
             timestamp: new Date().toISOString()
           }));
+
           recordMetric('chat_messages_processed', 1);
         }
       } catch (error) {
-        logger.error('Error processing chat message:', {
+        logger.error('Error processing chat message', {
           error: error.message,
           stack: error.stack,
           clientId: clients.get(ws)?.id,
           rawData: data.toString()
         });
+
         recordMetric('chat_processing_errors', 1);
         
         ws.send(JSON.stringify({
           type: 'error',
           error: 'Failed to process message',
+          details: error.message,
           timestamp: new Date().toISOString()
         }));
       }
@@ -129,12 +145,17 @@ export function initializeChatService(server) {
     // Handle client disconnect
     ws.on('close', () => {
       const client = clients.get(ws);
-      clients.delete(ws);
-      logger.info('Chat client disconnected', { 
-        clientId: client?.id,
-        connectedDuration: Date.now() - client?.lastMessage
-      });
-      recordMetric('chat_disconnections', 1);
+      if (client) {
+        logger.info('Chat client disconnected', {
+          clientId: client.id,
+          messageCount: client.messageCount,
+          duration: Date.now() - client.lastMessage,
+          timestamp: new Date().toISOString()
+        });
+        
+        clients.delete(ws);
+        recordMetric('chat_disconnections', 1);
+      }
     });
 
     // Handle heartbeat
@@ -146,13 +167,19 @@ export function initializeChatService(server) {
     });
   });
 
-  // Heartbeat to keep connections alive
+  // Heartbeat interval to keep connections alive
   const interval = setInterval(() => {
     wss.clients.forEach((ws) => {
       const client = clients.get(ws);
-      if (client === undefined) return;
+      if (!client) {
+        return ws.terminate();
+      }
 
       if (client.isAlive === false) {
+        logger.info('Terminating inactive client', {
+          clientId: client.id,
+          lastMessage: new Date(client.lastMessage).toISOString()
+        });
         clients.delete(ws);
         return ws.terminate();
       }
