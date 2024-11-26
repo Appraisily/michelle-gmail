@@ -4,20 +4,31 @@ import { responsePrompts } from './prompts/response.js';
 
 export const systemPrompts = {
   analysis: (companyKnowledge, apiInfo = {}) => {
-    logger.debug('Building analysis prompt with', {
-      hasCompanyKnowledge: !!companyKnowledge,
-      hasApiInfo: !!apiInfo,
-      endpointCount: apiInfo?.endpoints?.length || 0,
-      hasAuthentication: !!apiInfo?.authentication,
-      hasRateLimiting: !!apiInfo?.rateLimiting
+    // Debug log the raw input
+    logger.debug('Raw input data:', {
+      apiInfo,
+      companyKnowledge
+    });
+
+    // Debug log the endpoints specifically
+    logger.debug('API Endpoints data:', {
+      endpoints: apiInfo?.endpoints,
+      isArray: Array.isArray(apiInfo?.endpoints),
+      length: apiInfo?.endpoints?.length,
+      firstEndpoint: apiInfo?.endpoints?.[0]
     });
 
     const endpointsInfo = apiInfo?.endpoints 
-      ? apiInfo.endpoints.map(e => `${e.method} ${e.path}
+      ? apiInfo.endpoints.map(e => {
+          // Debug log each endpoint being processed
+          logger.debug('Processing endpoint:', e);
+          
+          return `${e.method} ${e.path}
 Description: ${e.description}
 Parameters: ${e.parameters.map(p => `\n  - ${p.name}: ${p.description}${p.required ? ' (Required)' : ''}`).join('')}
 Example Response: ${JSON.stringify(e.responseExample, null, 2)}
-`).join('\n\n')
+`
+        }).join('\n\n')
       : 'No endpoints available';
 
     const authInfo = apiInfo?.authentication
@@ -49,6 +60,7 @@ Consider the full email thread context when available.
 Use the company knowledge base: ${JSON.stringify(companyKnowledge)}
 `.trim();
 
+    // Debug log the final prompt
     logger.debug('Generated analysis prompt', {
       promptLength: prompt.length,
       hasEndpoints: endpointsInfo !== 'No endpoints available',
