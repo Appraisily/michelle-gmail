@@ -9,31 +9,44 @@ export const MessageType = {
   CONFIRM: 'confirm'
 };
 
-// Message Interfaces
-export interface BaseMessage {
-  type: string;
-  clientId: string;
-  timestamp: string;
-  messageId: string;
-}
+// Message Types as JSDoc for better IDE support
+/**
+ * @typedef {Object} BaseMessage
+ * @property {string} type - Message type
+ * @property {string} clientId - Client identifier
+ * @property {string} timestamp - ISO timestamp
+ * @property {string} messageId - Unique message ID
+ */
 
-export interface ChatMessage extends BaseMessage {
-  content: string;
-  conversationId: string;
-}
+/**
+ * @typedef {BaseMessage} ChatMessage
+ * @property {string} content - Message content
+ * @property {string} conversationId - Conversation identifier
+ */
 
-export interface ResponseMessage extends BaseMessage {
-  content: string;
-  conversationId: string;
-  replyTo?: string;
-}
+/**
+ * @typedef {BaseMessage} ResponseMessage
+ * @property {string} content - Response content
+ * @property {string} conversationId - Conversation identifier
+ * @property {string} [replyTo] - Original message ID being replied to
+ */
 
-export interface ErrorMessage extends BaseMessage {
-  error: string;
-  details?: string;
-  code?: string;
-}
+/**
+ * @typedef {BaseMessage} ErrorMessage
+ * @property {string} error - Error message
+ * @property {string} [details] - Detailed error information
+ * @property {string} [code] - Error code
+ */
 
-export interface ConfirmationMessage extends BaseMessage {
-  messageId: string;
-}
+/**
+ * @typedef {BaseMessage} ConfirmationMessage
+ * @property {string} messageId - ID of the message being confirmed
+ */
+
+export const MessageTypes = {
+  BASE: /** @type {BaseMessage} */ ({}),
+  CHAT: /** @type {ChatMessage} */ ({}),
+  RESPONSE: /** @type {ResponseMessage} */ ({}),
+  ERROR: /** @type {ErrorMessage} */ ({}),
+  CONFIRM: /** @type {ConfirmationMessage} */ ({})
+};
