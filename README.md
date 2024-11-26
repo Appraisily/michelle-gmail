@@ -2,276 +2,132 @@
 
 This service automatically processes incoming emails using Gmail API watch notifications, OpenAI for classification and response generation, and logs activities to Google Sheets. It integrates with Data Hub API for appraisal and sales data.
 
+## Core Features
+
+### 1. Email Processing
+- Real-time email monitoring via Gmail Watch API
+- Automatic thread context analysis
+- Image attachment processing with GPT-4V
+- Smart response generation
+- Rate-limited processing with retries
+- Pagination support for history fetching
+
+### 2. Chat Integration
+- WebSocket-based real-time chat
+- Message rate limiting (1 second cooldown)
+- Automatic reconnection handling
+- Client state tracking
+- Welcome messages for new connections
+- Heartbeat mechanism to maintain connections
+
+### 3. OpenAI Integration
+- GPT-4o for email/chat classification
+- GPT-4V for image analysis
+- Context-aware response generation
+- Automatic retry logic
+- Token limit management
+- Error handling and fallbacks
+
 ## Architecture Overview
 
-### Current Implementation (Email Processing)
+### Email Processing Flow
 ```
 Gmail Inbox
   ↓
-Gmail Watch API
+Gmail Watch API (with forced renewal)
   ↓
 Pub/Sub Topic (historyId)
   ↓
-Webhook
+Webhook Handler
   ↓
-Gmail API (fetch history)
+History Fetcher (with pagination)
   ↓
-Gmail API (fetch full message)
+Message Processor
+  ├── Thread Context Gatherer
+  ├── Image Attachment Extractor
+  └── Content Parser
   ↓
-Data Hub API (fetch endpoints)
+OpenAI Processor
+  ├── Message Classification
+  ├── Image Analysis (if applicable)
+  └── Response Generation
   ↓
-OpenAI (classification)
-  ↓
-Data Hub API (customer data)
-  ↓
-OpenAI (response generation)
-  ↓
-Google Sheets (logging)
+Google Sheets Logger
 ```
 
-### Future Multimodal Architecture
-The system is designed to be extended for multiple communication channels:
-
+### Chat System Architecture
 ```
-Communication Channels
-├── Email (Gmail) - Currently Implemented
-├── WordPress Comments - Future
-└── Live Chat - Future
-
-Message Processing Flow
-├── Channel Adapters
-│   ├── Gmail Adapter (active)
-│   ├── WordPress Adapter (planned)
-│   └── LiveChat Adapter (planned)
-│
-├── Message Queue (Pub/Sub)
-│   └── Channel-specific topics
-│
-├── Unified Message Format
-│   ├── Channel identifier
-│   ├── Sender information
-│   ├── Content
-│   └── Metadata
-│
-└── Response Router
-    └── Channel-specific formatters
-```
-
-### Image Processing Pipeline
-```
-Email with Attachments
+WebSocket Connection
   ↓
-Image Detection & Extraction
+Connection Manager
+  ├── Client State Tracking
+  ├── Rate Limiting
+  └── Heartbeat Monitoring
   ↓
-GPT-4o Analysis
-  ├── Object Description
-  ├── Condition Assessment
-  ├── Age Estimation
-  └── Notable Features
+Message Processor
+  ├── Format Validator
+  ├── Context Manager
+  └── Retry Handler
   ↓
-Response Generation
-  ├── Quick Assessment
-  ├── Value Indication
-  └── Professional Appraisal Offer
+OpenAI Integration
+  ├── Message Classification
+  └── Response Generation
+  ↓
+Response Router
 ```
 
-## Service Requirements
+## Key Components
 
-1. **Gmail Watch Management**
-   - Initial watch setup during service startup
-   - Watch expires after 7 days
-   - Automatic renewal via Cloud Scheduler every 6 hours
-   - Only one active watch allowed per Gmail account
-   - Health check every 15 minutes to prevent cold starts
+### Gmail Watch Management
+- Forced watch renewal during startup
+- Automatic cleanup of existing watches
+- History ID tracking and validation
+- Pagination support for large history sets
+- Error recovery mechanisms
 
-2. **Authentication Requirements**
-   - Gmail OAuth2 credentials
-   - Service account with appropriate permissions
-   - OpenAI API key for email processing
-   - Google Sheets access for logging
-   - Data Hub API key for appraisal/sales data
-   - Shared secret for watch renewal endpoint
+### Message Processing
+- Batch processing support
+- Thread context preservation
+- MIME content parsing
+- Image attachment handling
+- Rate limiting and throttling
+- Duplicate message detection
 
-3. **Runtime Requirements**
-   - Node.js v20 or higher
-   - Memory: 512Mi minimum
-   - CPU: 1 core minimum
-   - Persistent internet connection
+### Chat System
+- Client connection tracking
+- Message rate limiting
+- Automatic reconnection
+- Welcome message handling
+- Error recovery
+- State management
+
+### Monitoring and Logging
+- Detailed error tracking
+- Performance metrics
+- Client activity logging
+- Processing statistics
+- Health checks
 
 ## API Endpoints
 
 ### POST /api/gmail/webhook
 Receives Gmail notifications via Pub/Sub push subscription.
 
-**Request Body**: Pub/Sub message format
-```json
-{
-  "message": {
-    "data": "base64-encoded-data",
-    "attributes": {},
-    "messageId": "message-id",
-    "publishTime": "publish-time"
-  },
-  "subscription": "subscription-name"
-}
-```
-
 ### POST /api/gmail/renew-watch
-Manually renews Gmail watch subscription. Requires authentication.
-
-**Headers**:
-```
-Authorization: Bearer <shared-secret>
-```
+Manually renews Gmail watch subscription.
 
 ### POST /api/email/send
 Sends emails through Gmail API.
 
-**Authentication Required**: Yes (API Key)
-
-**Headers**:
-```
-X-API-Key: your_api_key_here
-```
-
-**Request Body**:
-```json
-{
-  "to": "recipient@example.com",
-  "subject": "Email Subject",
-  "body": "Email content in HTML format",
-  "threadId": "optional-gmail-thread-id"
-}
-```
-
-**Response**:
-```json
-{
-  "success": true,
-  "messageId": "message-id",
-  "threadId": "thread-id"
-}
-```
-
 ### GET /health
-Health check endpoint for service monitoring.
+Health check endpoint.
 
-**Response**:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-11-26T07:51:36.826Z"
-}
-```
+### WebSocket /chat
+Real-time chat connection endpoint.
 
-## Data Hub Integration
+## Configuration
 
-The service integrates with Data Hub API for customer data:
-
-1. **Endpoint Discovery**
-   - Fetches available endpoints on startup
-   - Caches endpoint information (5-minute TTL)
-   - Provides endpoint documentation to OpenAI
-
-2. **Data Retrieval**
-   - Appraisal status (pending/completed)
-   - Sales information
-   - Customer history
-
-3. **Authentication**
-   - Uses API key from Secret Manager
-   - Includes rate limiting protection
-   - Handles request retries
-
-## OpenAI Integration
-
-### 1. Email Analysis
-- Analyzes email content and thread context
-- Determines intent and urgency
-- Identifies required data lookups
-- Suggests response type
-- Classifies as APPRAISAL_LEAD or GENERAL_INQUIRY
-
-### 2. Image Analysis
-- Process image attachments
-- Use GPT-4o for visual analysis
-- Generate detailed object descriptions
-- Provide preliminary assessments
-
-### 3. Response Generation
-- Considers full conversation thread
-- Incorporates customer data
-- Maintains consistent tone
-- Includes standardized signature
-
-### 4. Function Definitions
-- Appraisal-related functions
-- Sales-related functions
-- Email analysis functions
-- Response generation functions
-
-## Google Sheets Logging
-
-The service logs all email processing activities:
-
-### Sheet Structure
-
-1. **Timestamp**: Processing date/time (UTC)
-2. **Message ID**: Unique Gmail message identifier
-3. **Sender**: Email sender
-4. **Subject**: Email subject
-5. **Has Attachments**: Yes/No
-6. **Requires Reply**: Yes/No
-7. **Reason**: Analysis explanation
-8. **Intent**: Classified intent
-9. **Urgency**: Priority level
-10. **Response Type**: Response format
-
-### Log Entry Example
-```
-Timestamp: 2024-11-26T07:51:36.826Z
-Sender: customer@example.com
-Subject: Appraisal Status Inquiry
-Has Attachments: No
-Requires Reply: Yes
-Reason: Customer requesting status update
-Intent: followup
-Urgency: medium
-Response Type: detailed
-Reply: [Full response text]
-```
-
-## Required Permissions
-
-### Service Account Permissions
-```bash
-# Set environment variables
-export PROJECT_ID=your-project-id
-export SERVICE_ACCOUNT=your-service-account@your-project.iam.gserviceaccount.com
-
-# Grant Pub/Sub permissions
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:gmail-api-push@system.gserviceaccount.com" \
-    --role="roles/pubsub.publisher"
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT" \
-    --role="roles/pubsub.subscriber"
-
-# Grant Secret Manager access
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT" \
-    --role="roles/secretmanager.secretAccessor"
-```
-
-### Gmail API Scopes
-Required OAuth scopes:
-- `https://www.googleapis.com/auth/gmail.modify`
-- `https://www.googleapis.com/auth/gmail.settings.basic`
-- `https://www.googleapis.com/auth/gmail.readonly`
-
-## Environment Variables
-
+### Environment Variables
 ```
 PROJECT_ID=your-gcp-project-id
 GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id
@@ -281,63 +137,66 @@ GMAIL_USER_EMAIL=info@appraisily.com
 NODE_ENV=production
 ```
 
-## Required Secrets
+### Required Secrets
+- GMAIL_CLIENT_ID
+- GMAIL_CLIENT_SECRET
+- GMAIL_REFRESH_TOKEN
+- OPENAI_API_KEY
+- MICHELLE_CHAT_LOG_SPREADSHEETID
+- DATA_HUB_API_KEY
+- SHARED_SECRET
 
-Configure in Secret Manager:
-```bash
-# Create secrets
-gcloud secrets create GMAIL_CLIENT_ID --replication-policy="automatic"
-gcloud secrets create GMAIL_CLIENT_SECRET --replication-policy="automatic"
-gcloud secrets create GMAIL_REFRESH_TOKEN --replication-policy="automatic"
-gcloud secrets create OPENAI_API_KEY --replication-policy="automatic"
-gcloud secrets create MICHELLE_CHAT_LOG_SPREADSHEETID --replication-policy="automatic"
-gcloud secrets create DATA_HUB_API_KEY --replication-policy="automatic"
-gcloud secrets create SHARED_SECRET --replication-policy="automatic"
+## Performance Optimizations
 
-# Add values
-echo -n "your-client-id" | gcloud secrets versions add GMAIL_CLIENT_ID --data-file=-
-echo -n "your-client-secret" | gcloud secrets versions add GMAIL_CLIENT_SECRET --data-file=-
-echo -n "your-refresh-token" | gcloud secrets versions add GMAIL_REFRESH_TOKEN --data-file=-
-echo -n "your-openai-key" | gcloud secrets versions add OPENAI_API_KEY --data-file=-
-echo -n "your-sheet-id" | gcloud secrets versions add MICHELLE_CHAT_LOG_SPREADSHEETID --data-file=-
-echo -n "your-data-hub-key" | gcloud secrets versions add DATA_HUB_API_KEY --data-file=-
-echo -n "your-shared-secret" | gcloud secrets versions add SHARED_SECRET --data-file=-
-```
+### Email Processing
+- Message batching (5 messages per batch)
+- Thread depth limiting (10 messages)
+- Content truncation for large emails
+- Duplicate message detection
+- Parallel message processing
 
-## Setup Instructions
+### Chat System
+- Rate limiting (1 second cooldown)
+- Message queue management
+- Connection pooling
+- Heartbeat optimization
+- State cleanup
 
-1. Create Pub/Sub infrastructure:
-   ```bash
-   # Create topic
-   gcloud pubsub topics create gmail-notifications
+### Memory Management
+- LRU cache for processed messages
+- History ID tracking cleanup
+- Client state pruning
+- Context truncation
+- Image optimization
 
-   # Create subscription
-   gcloud pubsub subscriptions create gmail-notifications-sub \
-       --topic gmail-notifications \
-       --push-endpoint=https://your-service-url/api/gmail/webhook \
-       --ack-deadline=60 \
-       --message-retention-duration=1d
-   ```
+## Error Handling
 
-2. Deploy using Cloud Build:
-   ```bash
-   gcloud builds submit
-   ```
+### Retry Logic
+- Maximum 3 retries for failed operations
+- 1-second delay between retries
+- Exponential backoff for API calls
+- Graceful degradation
+- Error recovery strategies
 
-## Monitoring
+### Monitoring
+- Error tracking
+- Performance metrics
+- Client connection status
+- Processing statistics
+- Health checks
 
-Built-in monitoring metrics:
-- Email classifications
-- Reply generations
-- OpenAI failures
-- Data Hub requests
-- API latencies
-- Image analyses
+## Security Features
 
-## Logging
+### Authentication
+- OAuth 2.0 for Gmail API
+- API key validation
+- Shared secret for watch renewal
+- Rate limiting
+- Input validation
 
-Cloud Run log levels:
-- ERROR: Critical failures
-- WARNING: Important issues
-- INFO: Normal operations
-- DEBUG: Development details
+### Data Protection
+- Secure WebSocket connections
+- Environment variable encryption
+- Secret management
+- Access control
+- Data sanitization
