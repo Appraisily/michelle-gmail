@@ -1,7 +1,7 @@
-import OpenAI from 'openai';
 import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { systemPrompts } from './prompts.js';
+import { getOpenAIClient } from './client.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o';
@@ -63,7 +63,7 @@ export async function generateResponse(
       hasImages: !!imageAttachments
     });
 
-    const openai = new OpenAI();
+    const openai = await getOpenAIClient();
 
     // Analyze images if present
     const imageAnalysis = await analyzeImages(openai, imageAttachments, companyKnowledge);

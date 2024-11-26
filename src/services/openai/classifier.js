@@ -1,8 +1,8 @@
-import OpenAI from 'openai';
 import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { systemPrompts } from './prompts.js';
 import { dataHubFunctions } from './functions.js';
+import { getOpenAIClient } from './client.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o-mini';
@@ -79,7 +79,7 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
       senderEmail
     });
 
-    const openai = new OpenAI();
+    const openai = await getOpenAIClient();
     
     // Format thread context if available
     const threadContext = threadMessages ? formatThreadForPrompt(threadMessages) : '';
