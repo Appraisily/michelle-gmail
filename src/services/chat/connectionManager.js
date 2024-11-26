@@ -31,7 +31,10 @@ export class ConnectionManager {
 
   isConnectionActive(ws) {
     const connection = this.connections.get(ws);
-    return connection && ws.readyState === ws.OPEN;
+    if (!connection) return false;
+    
+    // Consider connection active if WebSocket is connecting or open
+    return ws.readyState === 0 || ws.readyState === 1;
   }
 
   setMessageTimeout(messageId, ws, message) {
@@ -93,20 +96,22 @@ export class ConnectionManager {
       const messageId = message.messageId || uuidv4();
       message.messageId = messageId;
 
-      // Add to pending confirmations
-      const connection = this.connections.get(ws);
-      connection.pendingConfirmations.add(messageId);
+      // Add to pending confirmations if not an error or system message
+      if (message.type !== MessageType.ERROR && message.type !== MessageType.PONG) {
+        const connection = this.connections.get(ws);
+        connection.pendingConfirmations.add(messageId);
+        
+        // Set timeout for confirmation
+        this.setMessageTimeout(messageId, ws, message);
+      }
 
       // Send the message
       const serializedMessage = JSON.stringify(message);
       ws.send(serializedMessage);
 
-      // Set timeout for confirmation
-      this.setMessageTimeout(messageId, ws, message);
-
       logger.info('Message sent', {
         messageId,
-        clientId: connection.id,
+        clientId: message.clientId,
         type: message.type,
         timestamp: new Date().toISOString()
       });
@@ -132,6 +137,10 @@ export class ConnectionManager {
 
   getConnectionInfo(ws) {
     return this.connections.get(ws);
+  }
+
+  getAllConnections() {
+    return Array.from(this.connections.entries());
   }
 }
 
