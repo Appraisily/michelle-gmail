@@ -1,7 +1,7 @@
 import monitoring from '@google-cloud/monitoring';
 import { logger } from './logger.js';
 import pThrottle from 'p-throttle';
-import LRUCache from 'lru-cache';
+import { LRUCache } from 'lru-cache';
 
 const client = new monitoring.MetricServiceClient();
 
@@ -57,8 +57,8 @@ export const recordMetric = throttledRecord(async (name, value = 1) => {
       timeSeries: [timeSeriesData]
     });
 
-    metricsCache.set(cacheKey, true);
     logger.debug(`Metric ${name} recorded`, { value });
+    metricsCache.set(cacheKey, true);
   } catch (error) {
     logger.error(`Error recording metric ${name}:`, error);
   }
