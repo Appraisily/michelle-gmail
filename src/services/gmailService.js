@@ -5,13 +5,8 @@ import { classifyAndProcessEmail } from './openai/index.js';
 import { logEmailProcessing } from './sheetsService.js';
 
 const gmail = google.gmail('v1');
+let lastHistoryId = null;
 const processedMessages = new Set();
-
-// Clean up old processed messages periodically
-setInterval(() => {
-  const oldestMessages = Array.from(processedMessages).slice(0, 500);
-  oldestMessages.forEach(id => processedMessages.delete(id));
-}, 1000 * 60 * 60); // Every hour
 
 const SUPPORTED_IMAGE_TYPES = [
   'image/jpeg',
@@ -36,83 +31,21 @@ async function getGmailAuth() {
   return auth;
 }
 
-async function getHistory(auth, startHistoryId) {
+async function initializeHistoryId(auth) {
   try {
-    logger.info('Fetching history', { startHistoryId });
-    
-    const response = await gmail.users.history.list({
+    const profile = await gmail.users.getProfile({
       auth,
-      userId: 'me',
-      startHistoryId,
-      labelIds: ['INBOX']
+      userId: 'me'
     });
-
-    return response.data;
+    
+    lastHistoryId = profile.data.historyId;
+    logger.info('Initialized history ID', { historyId: lastHistoryId });
+    
+    return lastHistoryId;
   } catch (error) {
-    logger.error('Error fetching history:', error);
+    logger.error('Failed to initialize history ID:', error);
     throw error;
   }
-}
-
-async function downloadAttachment(auth, messageId, attachmentId) {
-  try {
-    const attachment = await gmail.users.messages.attachments.get({
-      auth,
-      userId: 'me',
-      messageId,
-      id: attachmentId
-    });
-
-    return Buffer.from(attachment.data.data, 'base64');
-  } catch (error) {
-    logger.error('Error downloading attachment:', error);
-    return null;
-  }
-}
-
-async function extractImageAttachments(auth, message) {
-  try {
-    const parts = message.payload.parts || [];
-    const imageAttachments = [];
-
-    for (const part of parts) {
-      if (part.mimeType && SUPPORTED_IMAGE_TYPES.includes(part.mimeType)) {
-        const attachmentId = part.body.attachmentId;
-        if (attachmentId) {
-          const buffer = await downloadAttachment(auth, message.id, attachmentId);
-          if (buffer) {
-            imageAttachments.push({
-              filename: part.filename,
-              mimeType: part.mimeType,
-              buffer
-            });
-          }
-        }
-      }
-    }
-
-    return imageAttachments;
-  } catch (error) {
-    logger.error('Error extracting image attachments:', error);
-    return [];
-  }
-}
-
-function parseEmailContent(payload) {
-  let content = '';
-  
-  if (payload.mimeType === 'text/plain' && payload.body.data) {
-    content = Buffer.from(payload.body.data, 'base64').toString();
-  } else if (payload.parts) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body.data) {
-        content = Buffer.from(part.body.data, 'base64').toString();
-        break;
-      }
-    }
-  }
-  
-  return content;
 }
 
 async function getThreadMessages(auth, threadId) {
@@ -153,10 +86,66 @@ async function getThreadMessages(auth, threadId) {
   }
 }
 
+function parseEmailContent(payload) {
+  let content = '';
+  
+  if (payload.mimeType === 'text/plain' && payload.body.data) {
+    content = Buffer.from(payload.body.data, 'base64').toString();
+  } else if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body.data) {
+        content = Buffer.from(part.body.data, 'base64').toString();
+        break;
+      }
+    }
+  }
+  
+  return content;
+}
+
+async function extractImageAttachments(auth, message) {
+  const attachments = [];
+
+  try {
+    if (!message.payload.parts) {
+      return attachments;
+    }
+
+    for (const part of message.payload.parts) {
+      if (part.mimeType && SUPPORTED_IMAGE_TYPES.includes(part.mimeType) && part.body.attachmentId) {
+        const attachment = await gmail.users.messages.attachments.get({
+          auth,
+          userId: 'me',
+          messageId: message.id,
+          id: part.body.attachmentId
+        });
+
+        if (attachment.data.data) {
+          attachments.push({
+            filename: part.filename,
+            mimeType: part.mimeType,
+            buffer: Buffer.from(attachment.data.data, 'base64')
+          });
+        }
+      }
+    }
+
+    logger.debug('Extracted image attachments', {
+      messageId: message.id,
+      count: attachments.length
+    });
+
+    return attachments;
+  } catch (error) {
+    logger.error('Error extracting image attachments:', error);
+    return attachments;
+  }
+}
+
 async function processMessage(auth, messageId) {
   // Skip if message was already processed
   if (processedMessages.has(messageId)) {
-    logger.info('Skipping already processed message', { messageId });
+    logger.debug('Skipping already processed message', { messageId });
     return true;
   }
 
@@ -201,7 +190,7 @@ async function processMessage(auth, messageId) {
       return true;
     }
 
-    // Extract image attachments if any
+    // Extract image attachments
     const imageAttachments = await extractImageAttachments(auth, message.data);
 
     // Process with OpenAI
@@ -214,8 +203,8 @@ async function processMessage(auth, messageId) {
 
     // Log to sheets
     await logEmailProcessing({
-      messageId: message.data.id,
       timestamp: new Date().toISOString(),
+      messageId: message.data.id,
       sender: from,
       subject,
       hasImages: imageAttachments.length > 0,
@@ -228,52 +217,71 @@ async function processMessage(auth, messageId) {
     // Mark message as processed
     processedMessages.add(messageId);
 
+    // Maintain a reasonable size for the Set
+    if (processedMessages.size > 1000) {
+      const oldestMessages = Array.from(processedMessages).slice(0, 500);
+      oldestMessages.forEach(id => processedMessages.delete(id));
+    }
+
     return true;
   } catch (error) {
-    logger.error('Error processing message:', error);
+    logger.error('Error processing message:', {
+      error: error.message,
+      stack: error.stack,
+      messageId
+    });
     return false;
   }
 }
 
 export async function handleWebhook(data) {
   try {
-    const auth = await getGmailAuth();
+    logger.info('Fetching history', { startHistoryId: lastHistoryId });
     
-    // Decode Pub/Sub message
+    const auth = await getGmailAuth();
     const decodedData = JSON.parse(Buffer.from(data.message.data, 'base64').toString());
     
     if (!decodedData.historyId) {
       throw new Error('No historyId in notification');
     }
 
-    // Get history since last processed ID
-    const history = await getHistory(auth, decodedData.historyId);
-
-    if (history.history) {
-      for (const item of history.history) {
-        logger.info('Processing history item', {
-          historyId: item.id,
-          messageCount: item.messages?.length
-        });
-
-        if (item.messages) {
-          const processPromises = item.messages.map(message => 
-            processMessage(auth, message.id)
-          );
-
-          await Promise.all(processPromises);
-        }
-      }
+    // Initialize lastHistoryId if not set
+    if (!lastHistoryId) {
+      await initializeHistoryId(auth);
     }
 
-    // Update last processed history ID
-    logger.info('Updated history ID', { historyId: decodedData.historyId });
-
-    // Acknowledge Pub/Sub message
-    logger.info('Pub/Sub message acknowledged', {
-      messageId: data.message.messageId,
-      subscription: data.subscription
+    // Fetch history
+    const history = await gmail.users.history.list({
+      auth,
+      userId: 'me',
+      startHistoryId: lastHistoryId,
+      historyTypes: ['messageAdded']
     });
+
+    if (!history.data.history) {
+      logger.info('No new history to process');
+      return;
+    }
+
+    // Process new messages
+    for (const item of history.data.history) {
+      if (!item.messages) continue;
+
+      logger.info('Processing history item', {
+        historyId: item.id,
+        messageCount: item.messages.length
+      });
+
+      const processPromises = item.messages.map(message => 
+        processMessage(auth, message.id)
+      );
+
+      await Promise.all(processPromises);
+    }
+
+    // Update lastHistoryId after successful processing
+    lastHistoryId = decodedData.historyId;
+    logger.info('Updated history ID', { historyId: lastHistoryId });
 
   } catch (error) {
     logger.error('Webhook processing failed:', error);
@@ -296,10 +304,7 @@ export async function sendEmail(to, subject, body, threadId = null) {
       body
     ].join('\n');
 
-    const encodedEmail = Buffer.from(email).toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+    const encodedEmail = Buffer.from(email).toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
 
     const params = {
       auth,

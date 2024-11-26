@@ -1,13 +1,21 @@
 import express from 'express';
+import http from 'http';
 import { logger } from './utils/logger.js';
 import { setupGmailWatch, renewWatch } from './services/gmailWatch.js';
 import { handleWebhook, sendEmail } from './services/gmailService.js';
 import { getSecrets } from './utils/secretManager.js';
+import { initializeChatService } from './services/chat/index.js';
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
+
+// Create HTTP server
+const server = http.createServer(app);
+
+// Initialize WebSocket for chat
+initializeChatService(server);
 
 // Middleware to verify API key
 async function verifyApiKey(req, res, next) {
@@ -132,7 +140,7 @@ async function startServer() {
     // Initial Gmail watch setup
     await setupGmailWatch();
     
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       logger.info('Server started', { port: PORT });
     });
   } catch (error) {

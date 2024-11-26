@@ -17,7 +17,9 @@
     "openai": "^4.20.1",
     "winston": "^3.11.0",
     "p-throttle": "^5.1.0",
-    "lru-cache": "^10.1.0"
+    "lru-cache": "^10.1.0",
+    "ws": "^8.14.2",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

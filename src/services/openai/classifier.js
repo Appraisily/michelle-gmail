@@ -12,9 +12,10 @@ async function handleFunctionCall(functionCall, senderEmail) {
     const { name, arguments: args } = functionCall;
     const parsedArgs = JSON.parse(args);
 
-    logger.info('Handling function call in classifier', {
+    logger.debug('Handling function call in classifier', {
       function: name,
-      args: parsedArgs
+      arguments: parsedArgs,
+      senderEmail
     });
 
     if (name === 'makeDataHubRequest') {
@@ -36,6 +37,12 @@ async function handleFunctionCall(functionCall, senderEmail) {
 
 function parseClassificationResponse(response) {
   try {
+    logger.debug('Parsing classification response', {
+      hasChoices: !!response.choices,
+      firstChoice: response.choices?.[0],
+      messageContent: response.choices?.[0]?.message?.content
+    });
+
     if (!response.choices?.[0]?.message?.content) {
       return {
         requiresReply: true,
@@ -49,6 +56,11 @@ function parseClassificationResponse(response) {
     try {
       return JSON.parse(response.choices[0].message.content);
     } catch (e) {
+      logger.debug('Failed to parse JSON response, using text fallback', {
+        error: e.message,
+        content: response.choices[0].message.content
+      });
+
       const content = response.choices[0].message.content;
       return {
         requiresReply: content.toLowerCase().includes('requires reply') || content.toLowerCase().includes('needs response'),
@@ -72,11 +84,14 @@ function parseClassificationResponse(response) {
 
 export async function classifyEmail(emailContent, senderEmail, threadMessages = null, imageAttachments = null, companyKnowledge, apiInfo) {
   try {
-    logger.info('Starting email classification', {
+    logger.debug('Starting email classification with details', {
       hasThread: !!threadMessages,
       threadLength: threadMessages?.length,
       hasImages: imageAttachments?.length || 0,
-      senderEmail
+      senderEmail,
+      emailContentLength: emailContent?.length,
+      hasApiInfo: !!apiInfo,
+      hasCompanyKnowledge: !!companyKnowledge
     });
 
     const openai = await getOpenAIClient();
@@ -86,6 +101,14 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
     const fullContext = threadContext 
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
+
+    logger.debug('Preparing OpenAI request', {
+      model: MODEL,
+      systemPrompt: systemPrompts.analysis(companyKnowledge, apiInfo),
+      threadContext: !!threadContext,
+      fullContextLength: fullContext.length,
+      apiEndpoints: apiInfo?.endpoints?.length
+    });
 
     // Initial classification
     const classificationResponse = await openai.chat.completions.create({
@@ -103,6 +126,13 @@ export async function classifyEmail(emailContent, senderEmail, threadMessages = 
       functions: [dataHubFunctions.makeRequest],
       function_call: "auto",
       temperature: 0.3
+    });
+
+    logger.debug('Received OpenAI classification response', {
+      responseId: classificationResponse.id,
+      model: classificationResponse.model,
+      hasFunctionCall: !!classificationResponse.choices[0].message.function_call,
+      responseContent: classificationResponse.choices[0].message.content
     });
 
     // Handle any function calls
