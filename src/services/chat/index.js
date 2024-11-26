@@ -3,8 +3,13 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { handleMessage, handleConnect, handleDisconnect } from './handlers.js';
 import { setupHeartbeat, HEARTBEAT_INTERVAL } from './heartbeat.js';
+import { connectionManager } from './connectionManager.js';
 
-const clients = new Map();
+const CONNECTION_TIMEOUT = 5000; // 5 seconds
+const RECONNECT_WINDOW = 3000; // 3 seconds
+
+// Track recent connections to prevent duplicates
+const recentConnections = new Map();
 
 export function initializeChatService(server) {
   const wss = new WebSocketServer({ server });
@@ -22,9 +27,49 @@ export function initializeChatService(server) {
           throw new Error('Invalid connection message');
         }
 
+        // Check for recent connections from this client
+        const recentConnection = recentConnections.get(message.clientId);
+        if (recentConnection) {
+          const timeSinceLastConnect = Date.now() - recentConnection.timestamp;
+          if (timeSinceLastConnect < RECONNECT_WINDOW) {
+            logger.warn('Rejecting duplicate connection attempt', {
+              clientId: message.clientId,
+              timeSinceLastConnect,
+              ip: clientIp
+            });
+            ws.close(1008, 'Duplicate connection');
+            return;
+          }
+        }
+
+        // Clean up any existing connection for this client
+        const existingConnection = connectionManager.getConnectionInfo(ws);
+        if (existingConnection) {
+          logger.info('Cleaning up existing connection', {
+            clientId: message.clientId,
+            previousConversationId: existingConnection.conversationId
+          });
+          handleDisconnect(existingConnection);
+          connectionManager.removeConnection(ws);
+        }
+
         // Initialize client data
         clientData = handleConnect(ws, message.clientId, clientIp);
-        clients.set(ws, clientData);
+        connectionManager.addConnection(ws, clientData);
+
+        // Track this connection
+        recentConnections.set(message.clientId, {
+          timestamp: Date.now(),
+          conversationId: clientData.conversationId
+        });
+
+        // Clean up old connection tracking
+        const now = Date.now();
+        for (const [id, data] of recentConnections.entries()) {
+          if (now - data.timestamp > RECONNECT_WINDOW) {
+            recentConnections.delete(id);
+          }
+        }
 
         // Set up message handler after successful connection
         ws.on('message', async (data) => {
@@ -51,14 +96,18 @@ export function initializeChatService(server) {
 
     // Handle client disconnect
     ws.on('close', () => {
-      handleDisconnect(clientData);
-      clients.delete(ws);
+      if (clientData) {
+        handleDisconnect(clientData);
+        connectionManager.removeConnection(ws);
+      }
     });
 
     // Handle heartbeat
     ws.on('pong', () => {
       if (clientData) {
         clientData.isAlive = true;
+        clientData.lastPong = Date.now();
+        connectionManager.updateActivity(ws);
       }
     });
 
@@ -68,7 +117,7 @@ export function initializeChatService(server) {
         logger.warn('Client failed to send connect message', { ip: clientIp });
         ws.terminate();
       }
-    }, 5000); // 5 second timeout
+    }, CONNECTION_TIMEOUT);
 
     // Clear timeout on first message or close
     ws.once('message', () => clearTimeout(connectionTimeout));
@@ -76,7 +125,7 @@ export function initializeChatService(server) {
   });
 
   // Setup heartbeat interval
-  const heartbeatInterval = setupHeartbeat(wss, clients);
+  const heartbeatInterval = setupHeartbeat(wss, connectionManager);
 
   // Clean up on service shutdown
   wss.on('close', () => {
@@ -84,18 +133,20 @@ export function initializeChatService(server) {
     
     // Close all client connections
     wss.clients.forEach(ws => {
-      const client = clients.get(ws);
+      const client = connectionManager.getConnectionInfo(ws);
       if (client) {
         handleDisconnect(client);
       }
       ws.terminate();
     });
     
-    clients.clear();
+    recentConnections.clear();
   });
 
   logger.info('Chat service initialized', {
     heartbeatInterval: HEARTBEAT_INTERVAL,
+    connectionTimeout: CONNECTION_TIMEOUT,
+    reconnectWindow: RECONNECT_WINDOW,
     timestamp: new Date().toISOString()
   });
 }

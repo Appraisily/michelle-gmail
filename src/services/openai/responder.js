@@ -1,6 +1,6 @@
 import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
-import { systemPrompts } from './prompts.js';
+import { agentPrompts } from './agentPrompts.js';
 import { getOpenAIClient } from './client.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
@@ -26,7 +26,7 @@ async function analyzeImages(openai, imageAttachments, companyKnowledge) {
       messages: [
         {
           role: "system",
-          content: systemPrompts.imageAnalysis(companyKnowledge)
+          content: agentPrompts.imageAnalysis(companyKnowledge)
         },
         {
           role: "user",
@@ -80,11 +80,10 @@ export async function generateResponse(
       messages: [
         {
           role: "system",
-          content: systemPrompts.response(
+          content: agentPrompts.response(
             classification.suggestedResponseType,
             classification.urgency,
-            companyKnowledge,
-            imageAnalysis
+            companyKnowledge
           )
         },
         {
