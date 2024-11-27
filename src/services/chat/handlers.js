@@ -2,7 +2,7 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { processChat } from './processor.js';
 import { v4 as uuidv4 } from 'uuid';
-import { MessageType, ConnectionState } from './connection/types.js';
+import { MessageType, ConnectionState, ConnectionStatus } from './connection/types.js';
 import { connectionManager } from './connection/manager.js';
 import { createMessage, sendMessage, handleIncomingMessage } from './messageHandler.js';
 
@@ -88,7 +88,8 @@ export function handleConnect(ws, clientId, clientIp) {
     isAlive: true,
     lastMessage: Date.now(),
     messageCount: 0,
-    conversationId: uuidv4()
+    conversationId: uuidv4(),
+    connectionStatus: ConnectionStatus.PENDING
   };
 
   // Add to connection manager before any async operations
@@ -103,8 +104,15 @@ export function handleConnect(ws, clientId, clientIp) {
   
   recordMetric('chat_connections', 1);
 
-  // Send welcome message only if connection is still open
+  // Send connection confirmation
   if (ws.readyState === ConnectionState.OPEN) {
+    sendMessage(ws, createMessage(MessageType.CONNECT_CONFIRM, clientId, {
+      messageId: uuidv4(),
+      conversationId: clientData.conversationId,
+      status: ConnectionStatus.CONFIRMED
+    }));
+
+    // Only send welcome message after connection confirmation
     sendMessage(ws, createMessage(MessageType.RESPONSE, clientId, {
       messageId: uuidv4(),
       conversationId: clientData.conversationId,
