@@ -19,7 +19,8 @@ export const MessageType = {
   ERROR: 'error',
   PING: 'ping',
   PONG: 'pong',
-  CONFIRM: 'confirm'
+  CONFIRM: 'confirm',
+  IMAGE_STATUS: 'image_status'
 };
 
 export const MessageDeliveryStatus = {
@@ -27,4 +28,11 @@ export const MessageDeliveryStatus = {
   DELIVERED: 'delivered',
   FAILED: 'failed',
   RETRYING: 'retrying'
+};
+
+export const ImageProcessingStatus = {
+  RECEIVED: 'received',
+  PROCESSING: 'processing',
+  ANALYZED: 'analyzed',
+  FAILED: 'failed'
 };
