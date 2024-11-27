@@ -68,6 +68,37 @@ async function fetchHistory(auth, startHistoryId, pageToken = null) {
   }
 }
 
+async function getLatestMessage(auth, historyId) {
+  try {
+    // Get messages list
+    const response = await gmail.users.messages.list({
+      auth,
+      userId: 'me',
+      maxResults: 1,
+      q: `after:${Math.floor(Date.now() / 1000 - 300)}` // Last 5 minutes
+    });
+
+    if (!response.data.messages || response.data.messages.length === 0) {
+      logger.warn('No recent messages found');
+      return null;
+    }
+
+    const message = response.data.messages[0];
+    logger.info('Found latest message', {
+      messageId: message.id,
+      threadId: message.threadId
+    });
+
+    return message;
+  } catch (error) {
+    logger.error('Error getting latest message:', {
+      error: error.message,
+      stack: error.stack
+    });
+    return null;
+  }
+}
+
 async function processHistoryItem(auth, item, retryCount = 0) {
   try {
     if (!item.messages || processedHistoryIds.has(item.id)) {
@@ -155,34 +186,31 @@ export async function handleWebhook(data) {
       lastHistoryId = await initializeHistoryId(auth);
     }
 
-    // Fetch and process history with pagination
-    let pageToken = null;
+    // Try to fetch history first
+    let historyData = await fetchHistory(auth, lastHistoryId);
     let processedAny = false;
 
-    do {
-      logger.info('Fetching history page', { 
-        startHistoryId: decodedData.historyId,
-        pageToken 
-      });
-
-      const historyData = await fetchHistory(auth, decodedData.historyId, pageToken);
-      
-      // Handle case where history ID is invalid/expired
-      if (!historyData) {
-        lastHistoryId = await initializeHistoryId(auth);
-        continue;
-      }
-
-      if (historyData.history && historyData.history.length > 0) {
-        // Process each history item
-        for (const item of historyData.history) {
-          const success = await processHistoryItem(auth, item);
-          if (success) processedAny = true;
+    // If no history (might be first message), try to get latest message directly
+    if (!historyData?.history || historyData.history.length === 0) {
+      const latestMessage = await getLatestMessage(auth, decodedData.historyId);
+      if (latestMessage) {
+        logger.info('Processing single message', {
+          messageId: latestMessage.id,
+          threadId: latestMessage.threadId
+        });
+        
+        const success = await processMessage(auth, latestMessage.id);
+        if (success) {
+          processedAny = true;
         }
       }
-
-      pageToken = historyData.nextPageToken;
-    } while (pageToken);
+    } else {
+      // Process history if available
+      for (const item of historyData.history) {
+        const success = await processHistoryItem(auth, item);
+        if (success) processedAny = true;
+      }
+    }
 
     // Update lastHistoryId after successful processing
     if (processedAny) {

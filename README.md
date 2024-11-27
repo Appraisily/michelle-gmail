@@ -12,13 +12,141 @@ This service automatically processes incoming emails using Gmail API watch notif
 - Rate-limited processing with retries
 - Pagination support for history fetching
 
-### 2. Chat Integration
+### 2. Real-time Chat System
+
+#### Connection Management
+```javascript
+// Initial connection message
+{
+  type: 'connect',
+  clientId: 'user-provided-id',
+  timestamp: '2024-11-26T16:04:30.965Z'
+}
+
+// Connection confirmation
+{
+  type: 'connect_confirm',
+  clientId: 'user-provided-id',
+  conversationId: 'unique-conversation-id',
+  status: 'confirmed',
+  timestamp: '2024-11-26T16:04:31.000Z'
+}
+
+// Server stores client data
+{
+  id: 'user-provided-id',
+  socket: WebSocket,
+  lastSeen: timestamp,
+  conversationId: 'unique-conversation-id',
+  isAlive: true,
+  messageCount: 0,
+  connectionStatus: 'confirmed'
+}
+```
+
+#### Message Delivery Protocol
+```javascript
+// 1. Client sends message
+{
+  type: 'message',
+  clientId: 'user-provided-id',
+  messageId: 'unique-message-id',
+  content: 'message content',
+  timestamp: '2024-11-26T16:04:30.965Z'
+}
+
+// 2. Server confirms receipt
+{
+  type: 'confirm',
+  messageId: 'unique-message-id',
+  status: 'received',
+  timestamp: '2024-11-26T16:04:31.000Z'
+}
+
+// 3. Server sends response
+{
+  type: 'response',
+  messageId: 'response-message-id',
+  replyTo: 'original-message-id',
+  content: 'response content',
+  timestamp: '2024-11-26T16:04:31.100Z'
+}
+
+// 4. Client confirms response receipt
+{
+  type: 'confirm',
+  messageId: 'response-message-id',
+  status: 'delivered',
+  timestamp: '2024-11-26T16:04:31.200Z'
+}
+```
+
+#### Image Processing Protocol
+```javascript
+// 1. Client sends message with image
+{
+  type: 'message',
+  clientId: 'user-provided-id',
+  messageId: 'unique-message-id',
+  content: 'optional message text',
+  images: [{
+    id: 'image-unique-id',
+    data: 'base64-encoded-image',
+    mimeType: 'image/jpeg',
+    filename: 'optional-original-name.jpg'
+  }],
+  timestamp: '2024-11-26T16:04:30.965Z'
+}
+
+// 2. Server confirms image receipt
+{
+  type: 'image_status',
+  messageId: 'unique-message-id',
+  imageId: 'image-unique-id',
+  status: 'received',
+  timestamp: '2024-11-26T16:04:31.000Z'
+}
+
+// 3. Server updates processing status
+{
+  type: 'image_status',
+  messageId: 'unique-message-id',
+  imageId: 'image-unique-id',
+  status: 'processing',
+  timestamp: '2024-11-26T16:04:31.100Z'
+}
+
+// 4. Server sends analysis response
+{
+  type: 'response',
+  messageId: 'response-message-id',
+  replyTo: 'original-message-id',
+  content: 'response with analysis',
+  imageAnalysis: [{
+    imageId: 'image-unique-id',
+    description: 'detailed description',
+    category: 'item category',
+    condition: 'item condition',
+    features: ['notable feature 1', 'notable feature 2'],
+    recommendations: ['professional recommendation 1', 'professional recommendation 2']
+  }],
+  timestamp: '2024-11-26T16:04:32.000Z'
+}
+```
+
+#### Features
 - WebSocket-based real-time chat
 - Message rate limiting (1 second cooldown)
 - Automatic reconnection handling
 - Client state tracking
 - Welcome messages for new connections
-- Heartbeat mechanism to maintain connections
+- Heartbeat mechanism (60-second interval)
+- Conversation context preservation
+- Error handling with retries
+- Secure client identification
+- Image processing queue management
+- Message delivery confirmation
+- Connection state management
 
 ### 3. OpenAI Integration
 - GPT-4o for email/chat classification
@@ -62,15 +190,18 @@ WebSocket Connection
 Connection Manager
   ├── Client State Tracking
   ├── Rate Limiting
+  ├── Message Queue
   └── Heartbeat Monitoring
   ↓
 Message Processor
   ├── Format Validator
   ├── Context Manager
+  ├── Image Queue
   └── Retry Handler
   ↓
 OpenAI Integration
   ├── Message Classification
+  ├── Image Analysis
   └── Response Generation
   ↓
 Response Router
@@ -78,28 +209,33 @@ Response Router
 
 ## Key Components
 
-### Gmail Watch Management
-- Forced watch renewal during startup
-- Automatic cleanup of existing watches
-- History ID tracking and validation
-- Pagination support for large history sets
-- Error recovery mechanisms
+### Chat System Components
+- Connection Manager: Handles WebSocket connections and client tracking
+- Message Processor: Validates and processes incoming messages
+- Context Manager: Maintains conversation history and state
+- Response Handler: Formats and sends responses
+- Heartbeat Service: Maintains connection health
+- Rate Limiter: Prevents message flooding
+- Image Queue: Manages image processing state
+- Message Queue: Handles message delivery and retries
 
-### Message Processing
-- Batch processing support
-- Thread context preservation
-- MIME content parsing
-- Image attachment handling
-- Rate limiting and throttling
-- Duplicate message detection
+### Image Processing
+- Support for JPEG, PNG, GIF, WebP formats
+- Maximum image size: 10MB
+- Parallel processing up to 10 images
+- 30-second timeout per image
+- Automatic retry on failure
+- Progress status updates
+- Detailed analysis results
 
-### Chat System
-- Client connection tracking
-- Message rate limiting
-- Automatic reconnection
-- Welcome message handling
+### Message Delivery
+- Unique message IDs
+- Delivery confirmation protocol
+- 5-second delivery timeout
+- Maximum 3 retry attempts
+- Exponential backoff
+- Status tracking
 - Error recovery
-- State management
 
 ### Monitoring and Logging
 - Detailed error tracking
@@ -107,8 +243,23 @@ Response Router
 - Client activity logging
 - Processing statistics
 - Health checks
+- Image processing metrics
+- Message delivery stats
 
 ## API Endpoints
+
+### WebSocket /chat
+Real-time chat connection endpoint.
+
+Message Types:
+- `connect`: Initial connection message
+- `connect_confirm`: Connection confirmation
+- `message`: Chat message
+- `response`: Server response
+- `error`: Error message
+- `ping/pong`: Connection health check
+- `confirm`: Message delivery confirmation
+- `image_status`: Image processing status
 
 ### POST /api/gmail/webhook
 Receives Gmail notifications via Pub/Sub push subscription.
@@ -121,9 +272,6 @@ Sends emails through Gmail API.
 
 ### GET /health
 Health check endpoint.
-
-### WebSocket /chat
-Real-time chat connection endpoint.
 
 ## Configuration
 
@@ -148,6 +296,17 @@ NODE_ENV=production
 
 ## Performance Optimizations
 
+### Chat System
+- Message batching
+- Rate limiting (1 second cooldown)
+- Connection pooling
+- Heartbeat optimization
+- State cleanup
+- Context truncation
+- Image queue management
+- Message delivery tracking
+- Conversation cleanup after 30 minutes of inactivity
+
 ### Email Processing
 - Message batching (5 messages per batch)
 - Thread depth limiting (10 messages)
@@ -155,19 +314,13 @@ NODE_ENV=production
 - Duplicate message detection
 - Parallel message processing
 
-### Chat System
-- Rate limiting (1 second cooldown)
-- Message queue management
-- Connection pooling
-- Heartbeat optimization
-- State cleanup
-
 ### Memory Management
 - LRU cache for processed messages
 - History ID tracking cleanup
 - Client state pruning
 - Context truncation
 - Image optimization
+- Message queue cleanup
 
 ## Error Handling
 
@@ -184,6 +337,8 @@ NODE_ENV=production
 - Client connection status
 - Processing statistics
 - Health checks
+- Image processing metrics
+- Message delivery stats
 
 ## Security Features
 
@@ -200,3 +355,5 @@ NODE_ENV=production
 - Secret management
 - Access control
 - Data sanitization
+- Image size validation
+- Message validation
