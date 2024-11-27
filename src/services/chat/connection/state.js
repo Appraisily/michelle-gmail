@@ -1,22 +1,31 @@
 import { logger } from '../../../utils/logger.js';
 import { ConnectionState } from './types.js';
 
-class ConnectionStateManager {
+export class ConnectionStateManager {
   constructor() {
     this.connections = new Map();
   }
 
   addConnection(ws, clientData) {
-    this.connections.set(ws, {
-      ...clientData,
-      pendingConfirmations: new Set(),
-      lastActivity: Date.now()
-    });
-    
-    logger.debug('Client connection added', {
-      clientId: clientData.id,
-      conversationId: clientData.conversationId
-    });
+    // Only add if connection is in CONNECTING or OPEN state
+    if (ws.readyState <= ConnectionState.OPEN) {
+      this.connections.set(ws, {
+        ...clientData,
+        pendingConfirmations: new Set(),
+        lastActivity: Date.now()
+      });
+      
+      logger.debug('Client connection added', {
+        clientId: clientData.id,
+        conversationId: clientData.conversationId,
+        readyState: ws.readyState
+      });
+    } else {
+      logger.warn('Attempted to add invalid connection', {
+        clientId: clientData.id,
+        readyState: ws.readyState
+      });
+    }
   }
 
   removeConnection(ws) {
@@ -40,7 +49,7 @@ class ConnectionStateManager {
       return false;
     }
 
-    // WebSocket.OPEN is 1
+    // Check if connection is OPEN (1)
     return ws.readyState === ConnectionState.OPEN;
   }
 

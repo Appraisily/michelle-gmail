@@ -2,13 +2,22 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { processChat } from './processor.js';
 import { v4 as uuidv4 } from 'uuid';
-import { MessageType } from './connection/types.js';
+import { MessageType, ConnectionState } from './connection/types.js';
 import { connectionManager } from './connection/manager.js';
 import { createMessage, sendMessage, handleIncomingMessage } from './messageHandler.js';
 
 export const RATE_LIMIT_WINDOW = 1000; // 1 second between messages
 
 export async function handleMessage(ws, data, client) {
+  // Verify connection is still open
+  if (ws.readyState !== ConnectionState.OPEN) {
+    logger.warn('Attempted to handle message on non-open connection', {
+      clientId: client?.id,
+      readyState: ws.readyState
+    });
+    return;
+  }
+
   const message = handleIncomingMessage(ws, data, client);
   if (!message) return;
 
@@ -44,12 +53,15 @@ export async function handleMessage(ws, data, client) {
       conversationId: client.conversationId
     }, client.id);
 
-    return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
-      messageId: response.messageId,
-      content: response.content,
-      conversationId: client.conversationId,
-      replyTo: message.messageId
-    }));
+    // Verify connection is still open before sending response
+    if (ws.readyState === ConnectionState.OPEN) {
+      return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
+        messageId: response.messageId,
+        content: response.content,
+        conversationId: client.conversationId,
+        replyTo: message.messageId
+      }));
+    }
 
   } catch (error) {
     logger.error('Error processing chat message', {
@@ -58,11 +70,13 @@ export async function handleMessage(ws, data, client) {
       stack: error.stack
     });
 
-    sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
-      error: 'Failed to process message',
-      details: error.message,
-      code: 'PROCESSING_ERROR'
-    }));
+    if (ws.readyState === ConnectionState.OPEN) {
+      sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
+        error: 'Failed to process message',
+        details: error.message,
+        code: 'PROCESSING_ERROR'
+      }));
+    }
   }
 }
 
@@ -90,7 +104,7 @@ export function handleConnect(ws, clientId, clientIp) {
   recordMetric('chat_connections', 1);
 
   // Send welcome message only if connection is still open
-  if (ws.readyState === 1) { // WebSocket.OPEN
+  if (ws.readyState === ConnectionState.OPEN) {
     sendMessage(ws, createMessage(MessageType.RESPONSE, clientId, {
       messageId: uuidv4(),
       conversationId: clientData.conversationId,

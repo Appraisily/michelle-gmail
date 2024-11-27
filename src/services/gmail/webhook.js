@@ -50,8 +50,8 @@ async function fetchHistory(auth, startHistoryId, pageToken = null) {
     });
 
     const history = await gmail.users.history.list(params);
-
-    logger.debug('History data received:', {
+    
+    logger.debug('History data received', {
       hasHistory: !!history.data.history,
       messageCount: history.data.history?.length || 0,
       hasNextPage: !!history.data.nextPageToken
@@ -71,20 +71,15 @@ async function fetchHistory(auth, startHistoryId, pageToken = null) {
 async function processHistoryItem(auth, item, retryCount = 0) {
   try {
     if (!item.messages || processedHistoryIds.has(item.id)) {
-      return;
+      return true;
     }
 
-    logger.debug('Processing history item', {
+    logger.info('Processing history item', {
       historyId: item.id,
-      messageCount: item.messages.length,
-      messages: item.messages.map(m => ({
-        id: m.id,
-        threadId: m.threadId,
-        labelIds: m.labelIds
-      }))
+      messageCount: item.messages.length
     });
 
-    // Process messages in parallel
+    // Process all messages in parallel
     const results = await Promise.all(
       item.messages.map(message => 
         processMessage(auth, message.id)
@@ -98,10 +93,6 @@ async function processHistoryItem(auth, item, retryCount = 0) {
     if (processedHistoryIds.size > 1000) {
       const oldestIds = Array.from(processedHistoryIds).slice(0, 500);
       oldestIds.forEach(id => processedHistoryIds.delete(id));
-      logger.debug('Cleaned up processed history IDs', {
-        removed: oldestIds.length,
-        remaining: processedHistoryIds.size
-      });
     }
 
     return results.every(result => result === true);
@@ -136,16 +127,18 @@ export async function handleWebhook(data) {
       throw new Error('No historyId in notification');
     }
 
-    logger.debug('Decoded Pub/Sub data:', {
+    logger.info('Processing webhook notification', {
       historyId: decodedData.historyId,
       emailAddress: decodedData.emailAddress
     });
 
-    // Use notification historyId as starting point if no lastHistoryId
-    const startHistoryId = lastHistoryId || decodedData.historyId;
+    // Always process from notification historyId
+    const startHistoryId = decodedData.historyId;
 
     // Fetch and process history with pagination
     let pageToken = null;
+    let processedAny = false;
+
     do {
       logger.info('Fetching history page', { 
         startHistoryId,
@@ -160,19 +153,28 @@ export async function handleWebhook(data) {
         continue;
       }
 
-      if (historyData.history) {
+      if (historyData.history && historyData.history.length > 0) {
         // Process each history item
         for (const item of historyData.history) {
-          await processHistoryItem(auth, item);
+          const success = await processHistoryItem(auth, item);
+          if (success) processedAny = true;
         }
       }
 
       pageToken = historyData.nextPageToken;
     } while (pageToken);
 
-    // Update lastHistoryId after successful processing
-    lastHistoryId = decodedData.historyId;
-    logger.info('Updated history ID', { historyId: lastHistoryId });
+    // Update lastHistoryId only after successful processing
+    if (processedAny) {
+      lastHistoryId = decodedData.historyId;
+      logger.info('Updated history ID', { historyId: lastHistoryId });
+    }
+
+    // Always acknowledge the message
+    logger.info('Pub/Sub message acknowledged', {
+      messageId: data.message.messageId,
+      subscription: data.subscription
+    });
 
   } catch (error) {
     logger.error('Webhook processing failed:', {
