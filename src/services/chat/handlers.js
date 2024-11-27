@@ -2,7 +2,8 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { processChat } from './processor.js';
 import { v4 as uuidv4 } from 'uuid';
-import { MessageType } from './types.js';
+import { MessageType } from './connection/types.js';
+import { connectionManager } from './connection/manager.js';
 import { createMessage, sendMessage, handleIncomingMessage } from './messageHandler.js';
 
 export const RATE_LIMIT_WINDOW = 1000; // 1 second between messages
@@ -66,32 +67,38 @@ export async function handleMessage(ws, data, client) {
 }
 
 export function handleConnect(ws, clientId, clientIp) {
-  const clientData = {
-    id: clientId,
-    ip: clientIp,
-    isAlive: true,
-    lastMessage: Date.now(),
-    messageCount: 0,
-    conversationId: uuidv4()
-  };
+  // Wait for connection to be fully established
+  setTimeout(() => {
+    const clientData = {
+      id: clientId,
+      ip: clientIp,
+      isAlive: true,
+      lastMessage: Date.now(),
+      messageCount: 0,
+      conversationId: uuidv4()
+    };
 
-  logger.info('Chat client connected', { 
-    clientId: clientData.id,
-    conversationId: clientData.conversationId,
-    ip: clientIp,
-    timestamp: new Date().toISOString()
-  });
-  
-  recordMetric('chat_connections', 1);
+    logger.info('Chat client connected', { 
+      clientId: clientData.id,
+      conversationId: clientData.conversationId,
+      ip: clientIp,
+      timestamp: new Date().toISOString()
+    });
+    
+    recordMetric('chat_connections', 1);
 
-  // Send welcome message
-  sendMessage(ws, createMessage(MessageType.RESPONSE, clientId, {
-    messageId: uuidv4(),
-    conversationId: clientData.conversationId,
-    content: 'Welcome! I\'m Michelle from Appraisily. How can I assist you with your art and antique appraisal needs today?'
-  }));
-  
-  return clientData;
+    // Add connection first
+    connectionManager.addConnection(ws, clientData);
+
+    // Then send welcome message
+    sendMessage(ws, createMessage(MessageType.RESPONSE, clientId, {
+      messageId: uuidv4(),
+      conversationId: clientData.conversationId,
+      content: 'Welcome! I\'m Michelle from Appraisily. How can I assist you with your art and antique appraisal needs today?'
+    }));
+    
+    return clientData;
+  }, 100); // Small delay to ensure connection is ready
 }
 
 export function handleDisconnect(client) {

@@ -1,9 +1,9 @@
 import { WebSocketServer } from 'ws';
 import { logger } from '../../utils/logger.js';
-import { recordMetric } from '../../utils/monitoring.js';
 import { handleMessage, handleConnect, handleDisconnect } from './handlers.js';
-import { setupHeartbeat, HEARTBEAT_INTERVAL } from './heartbeat.js';
-import { connectionManager } from './connectionManager.js';
+import { setupHeartbeat, handlePong } from './heartbeat.js';
+import { connectionManager } from './connection/manager.js';
+import { ConnectionState } from './connection/types.js';
 
 const CONNECTION_TIMEOUT = 5000; // 5 seconds
 const RECONNECT_WINDOW = 3000; // 3 seconds
@@ -53,9 +53,8 @@ export function initializeChatService(server) {
           connectionManager.removeConnection(ws);
         }
 
-        // Initialize client data
+        // Initialize client data and send welcome message
         clientData = handleConnect(ws, message.clientId, clientIp);
-        connectionManager.addConnection(ws, clientData);
 
         // Track this connection
         recentConnections.set(message.clientId, {
@@ -74,7 +73,9 @@ export function initializeChatService(server) {
         // Set up message handler after successful connection
         ws.on('message', async (data) => {
           try {
-            await handleMessage(ws, data, clientData);
+            if (ws.readyState === ConnectionState.OPEN) {
+              await handleMessage(ws, data, clientData);
+            }
           } catch (error) {
             logger.error('Error handling message', {
               error: error.message,
@@ -104,9 +105,8 @@ export function initializeChatService(server) {
 
     // Handle heartbeat
     ws.on('pong', () => {
-      if (clientData) {
-        clientData.isAlive = true;
-        clientData.lastPong = Date.now();
+      if (clientData && ws.readyState === ConnectionState.OPEN) {
+        handlePong(ws, clientData);
         connectionManager.updateActivity(ws);
       }
     });

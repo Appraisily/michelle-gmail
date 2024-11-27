@@ -1,7 +1,7 @@
 import { logger } from '../../utils/logger.js';
-import { MessageType } from './types.js';
+import { MessageType } from './connection/types.js';
 import { v4 as uuidv4 } from 'uuid';
-import { connectionManager } from './connectionManager.js';
+import { connectionManager } from './connection/manager.js';
 
 export function createMessage(type, clientId, data = {}) {
   return {

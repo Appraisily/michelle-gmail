@@ -1,4 +1,5 @@
 import { logger } from '../../utils/logger.js';
+import { ConnectionState } from './connection/types.js';
 
 export const HEARTBEAT_INTERVAL = 60000; // 60 seconds
 
@@ -31,16 +32,18 @@ export function setupHeartbeat(wss, connectionManager) {
       // Mark as inactive until pong received
       client.isAlive = false;
       
-      // Send ping (will trigger pong event if client is alive)
-      ws.ping('', false, (err) => {
-        if (err) {
-          logger.error('Error sending ping', {
-            error: err.message,
-            clientId: client.id,
-            stack: err.stack
-          });
-        }
-      });
+      // Only send ping if connection is open
+      if (ws.readyState === ConnectionState.OPEN) {
+        ws.ping('', false, (err) => {
+          if (err) {
+            logger.error('Error sending ping', {
+              error: err.message,
+              clientId: client.id,
+              stack: err.stack
+            });
+          }
+        });
+      }
     });
   }, HEARTBEAT_INTERVAL);
 

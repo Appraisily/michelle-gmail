@@ -20,7 +20,7 @@ async function initializeSheet(auth, spreadsheetId) {
       // Create the Logs sheet with headers and set column formats
       const headers = [
         ['Timestamp', 'Message ID', 'Sender', 'Subject', 'Has Attachments', 'Requires Reply', 'Classification', 'Reason', 
-         'Intent', 'Urgency', 'Response Type']
+         'Intent', 'Urgency', 'Response Type', 'Generated Reply']
       ];
 
       await sheets.spreadsheets.batchUpdate({
@@ -35,7 +35,7 @@ async function initializeSheet(auth, spreadsheetId) {
                   startRowIndex: 0,
                   endRowIndex: 1,
                   startColumnIndex: 0,
-                  endColumnIndex: 11
+                  endColumnIndex: 12
                 },
                 rows: [{
                   values: headers[0].map(header => ({
@@ -101,7 +101,8 @@ export async function logEmailProcessing(logData) {
       spreadsheetId,
       messageId: logData.messageId,
       sender: logData.sender,
-      subject: logData.subject
+      subject: logData.subject,
+      hasReply: !!logData.reply
     });
 
     // Format timestamp as ISO string for proper date/time handling in Sheets
@@ -121,13 +122,14 @@ export async function logEmailProcessing(logData) {
       logData.reason,
       logData.classification?.intent || 'N/A',
       logData.classification?.urgency || 'N/A',
-      logData.classification?.suggestedResponseType || 'N/A'
+      logData.classification?.suggestedResponseType || 'N/A',
+      logData.reply || 'No reply generated'
     ]];
 
     await sheets.spreadsheets.values.append({
       auth,
       spreadsheetId,
-      range: 'Logs!A2:K',
+      range: 'Logs!A2:L', // Updated range to include the new column
       valueInputOption: 'USER_ENTERED', // This ensures proper date/time parsing
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
@@ -139,7 +141,8 @@ export async function logEmailProcessing(logData) {
       messageId: logData.messageId,
       timestamp,
       hasAttachments: logData.hasImages ? 'Yes' : 'No',
-      classification
+      classification,
+      hasReply: !!logData.reply
     });
   } catch (error) {
     logger.error('Error logging to Google Sheets:', {
