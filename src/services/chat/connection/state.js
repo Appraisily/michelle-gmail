@@ -1,7 +1,7 @@
 import { logger } from '../../../utils/logger.js';
 import { ConnectionState } from './types.js';
 
-export class ConnectionStateManager {
+class ConnectionStateManager {
   constructor() {
     this.connections = new Map();
   }
@@ -41,15 +41,7 @@ export class ConnectionStateManager {
     }
 
     // WebSocket.OPEN is 1
-    const isOpen = ws.readyState === ConnectionState.OPEN;
-    if (!isOpen) {
-      logger.debug('Connection not active', {
-        clientId: connection.id,
-        readyState: ws.readyState
-      });
-    }
-
-    return isOpen;
+    return ws.readyState === ConnectionState.OPEN;
   }
 
   updateActivity(ws) {
@@ -64,7 +56,7 @@ export class ConnectionStateManager {
   }
 
   getConnectionInfo(ws) {
-    return this.connections.get(ws) || null;
+    return this.connections.get(ws);
   }
 
   getAllConnections() {

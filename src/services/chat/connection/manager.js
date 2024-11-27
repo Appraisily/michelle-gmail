@@ -4,100 +4,101 @@ import { messageQueue } from './messageQueue.js';
 import { MessageType, ConnectionState, ImageProcessingStatus } from './types.js';
 import { v4 as uuidv4 } from 'uuid';
 
-const MAX_IMAGE_QUEUE_SIZE = 10; // Maximum number of images being processed at once
-const IMAGE_PROCESSING_TIMEOUT = 30000; // 30 seconds timeout for image processing
-const MAX_RECONNECT_ATTEMPTS = 5; // Maximum number of reconnection attempts
-const RECONNECT_BASE_DELAY = 1000; // Base delay for exponential backoff (1 second)
-
-export class ConnectionManager {
+class ConnectionManager {
   constructor() {
     this.state = connectionState;
     this.messageQueue = messageQueue;
-    this.imageQueues = new Map(); // clientId -> Set of processing image IDs
-    this.imageTimeouts = new Map(); // imageId -> timeout handle
-    this.reconnectAttempts = new Map(); // clientId -> number of attempts
-    this.reconnectTimers = new Map(); // clientId -> timeout handle
+    this.imageQueues = new Map();
+    this.imageTimeouts = new Map();
   }
 
-  /**
-   * Add new client connection with reconnection handling
-   * @param {WebSocket} ws WebSocket connection
-   * @param {ClientData} clientData Client information
-   */
-  addConnection(ws, clientData) {
-    // Clear any existing reconnection state
-    this.clearReconnectionState(clientData.id);
+  getConnectionInfo(ws) {
+    return this.state.getConnectionInfo(ws);
+  }
 
-    // Only add if connection is in CONNECTING or OPEN state
+  addConnection(ws, clientData) {
     if (ws.readyState <= ConnectionState.OPEN) {
       this.state.addConnection(ws, clientData);
       this.imageQueues.set(clientData.id, new Set());
       logger.info('New connection added', {
         clientId: clientData.id,
-        readyState: ws.readyState,
-        attempts: this.reconnectAttempts.get(clientData.id) || 0
-      });
-    } else {
-      const attempts = (this.reconnectAttempts.get(clientData.id) || 0) + 1;
-      
-      if (attempts > MAX_RECONNECT_ATTEMPTS) {
-        logger.error('Maximum reconnection attempts reached', {
-          clientId: clientData.id,
-          attempts
-        });
-        this.clearReconnectionState(clientData.id);
-        return;
-      }
-
-      this.reconnectAttempts.set(clientData.id, attempts);
-      const delay = RECONNECT_BASE_DELAY * Math.pow(2, attempts - 1);
-
-      logger.warn('Connection failed, scheduling retry', {
-        clientId: clientData.id,
-        attempts,
-        delay,
         readyState: ws.readyState
       });
-
-      // Schedule reconnection attempt
-      const timer = setTimeout(() => {
-        this.handleReconnection(ws, clientData);
-      }, delay);
-
-      this.reconnectTimers.set(clientData.id, timer);
+    } else {
+      logger.warn('Attempted to add invalid connection', {
+        clientId: clientData.id,
+        readyState: ws.readyState
+      });
     }
   }
 
-  /**
-   * Handle reconnection attempt
-   * @param {WebSocket} ws WebSocket connection
-   * @param {ClientData} clientData Client information
-   */
-  handleReconnection(ws, clientData) {
-    if (ws.readyState === ConnectionState.OPEN) {
-      // Connection is already open, clear reconnection state
-      this.clearReconnectionState(clientData.id);
-      return;
+  removeConnection(ws) {
+    const client = this.state.getConnectionInfo(ws);
+    if (client) {
+      this.messageQueue.cleanupClientMessages(client.id);
+      this.cleanupImageQueue(client.id);
+      logger.info('Connection removed', {
+        clientId: client.id,
+        readyState: ws.readyState
+      });
     }
-
-    // Try to reconnect
-    this.addConnection(ws, clientData);
+    this.state.removeConnection(ws);
   }
 
-  /**
-   * Clear reconnection state for a client
-   * @param {string} clientId Client identifier
-   */
-  clearReconnectionState(clientId) {
-    this.reconnectAttempts.delete(clientId);
-    const timer = this.reconnectTimers.get(clientId);
-    if (timer) {
-      clearTimeout(timer);
-      this.reconnectTimers.delete(clientId);
+  updateActivity(ws) {
+    if (ws && ws.readyState === ConnectionState.OPEN) {
+      this.state.updateActivity(ws);
     }
   }
 
-  // ... [rest of the existing methods remain unchanged]
+  async sendMessage(ws, message) {
+    try {
+      if (!ws || ws.readyState !== ConnectionState.OPEN) {
+        logger.warn('Cannot send message - connection not in OPEN state', {
+          clientId: message.clientId,
+          readyState: ws?.readyState
+        });
+        return false;
+      }
+
+      const messageId = message.messageId || uuidv4();
+      message.messageId = messageId;
+
+      if (message.type !== MessageType.ERROR && 
+          message.type !== MessageType.PONG && 
+          message.type !== MessageType.CONFIRM) {
+        this.messageQueue.addPendingMessage(messageId, ws, message);
+      }
+
+      const serializedMessage = JSON.stringify(message);
+      ws.send(serializedMessage);
+
+      logger.info('Message sent', {
+        messageId,
+        clientId: message.clientId,
+        type: message.type,
+        timestamp: new Date().toISOString()
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('Failed to send message', {
+        error: error.message,
+        type: message.type,
+        clientId: message.clientId,
+        stack: error.stack
+      });
+      return false;
+    }
+  }
+
+  confirmMessageDelivery(ws, messageId) {
+    return this.messageQueue.confirmDelivery(messageId);
+  }
+
+  getAllConnections() {
+    return this.state.getAllConnections();
+  }
 }
 
 export const connectionManager = new ConnectionManager();
