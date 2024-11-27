@@ -13,13 +13,15 @@ async function getAvailableEndpoints() {
     logger.info('Fetched Data Hub endpoints', {
       endpointCount: apiInfo.endpoints?.length,
       authentication: apiInfo.authentication?.type,
-      rateLimiting: apiInfo.rateLimiting?.requestsPerWindow
+      rateLimiting: apiInfo.rateLimiting?.requestsPerWindow,
+      timestamp: new Date().toISOString()
     });
-    return apiInfo.endpoints;
+    return apiInfo.endpoints || [];
   } catch (error) {
     logger.error('Failed to fetch endpoints:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     return [];
   }
@@ -32,7 +34,8 @@ async function queryDataHub(endpoint, method, params = null, body = null) {
       endpoint,
       method,
       hasParams: !!params,
-      hasBody: !!body
+      hasBody: !!body,
+      timestamp: new Date().toISOString()
     });
     return data;
   } catch (error) {
@@ -40,7 +43,8 @@ async function queryDataHub(endpoint, method, params = null, body = null) {
       error: error.message,
       endpoint,
       method,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     return null;
   }
@@ -92,7 +96,7 @@ export async function generateResponse(
 
 Current sender information:
 - Name: ${senderInfo?.name || 'Unknown'}
-- Email: ${senderInfo?.email}
+- Email: ${senderInfo?.email || 'Unknown'}
 - Previous interactions: ${threadMessages?.length || 0}
 - Message type: ${threadMessages?.length ? 'Follow-up message' : 'First contact'}
 
@@ -177,7 +181,9 @@ You can query these endpoints to get additional information when needed.`;
 }
 
 async function analyzeImages(openai, imageAttachments, companyKnowledge) {
-  if (!imageAttachments || imageAttachments.length === 0) return null;
+  if (!imageAttachments || !Array.isArray(imageAttachments) || imageAttachments.length === 0) {
+    return null;
+  }
 
   try {
     const imageAnalysisResponse = await openai.chat.completions.create({
@@ -230,7 +236,7 @@ function formatImageAttachments(imageAttachments) {
 }
 
 function formatThreadForPrompt(threadMessages) {
-  if (!threadMessages || !Array.isArray(threadMessages) || threadMessages.length === 0) {
+  if (!threadMessages || !Array.isArray(threadMessages)) {
     return '';
   }
 
