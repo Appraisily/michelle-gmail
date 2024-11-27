@@ -46,37 +46,48 @@ export async function getAvailableEndpoints() {
 
 export async function queryDataHub(endpoint, method, params = null) {
   try {
-    const key = await getApiKey();
-    const url = new URL(`${DATA_HUB_API}${endpoint}`);
+    // Get API key first
+    const apiKey = await getApiKey();
     
+    // Build URL with query parameters
+    const url = new URL(`${DATA_HUB_API}${endpoint}`);
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
         if (value !== null && value !== undefined) {
-          url.searchParams.append(key, value);
+          url.searchParams.append(key, value.toString());
         }
       });
     }
 
-    const headers = {
-      'X-API-Key': key,
-      'Content-Type': 'application/json'
+    // Prepare request options
+    const options = {
+      method,
+      headers: {
+        'X-API-Key': apiKey,
+        'Accept': 'application/json'
+      }
     };
 
     logger.debug('Making DataHub request', {
-      endpoint,
+      url: url.toString(),
       method,
       hasParams: !!params,
-      hasApiKey: !!key,
+      hasApiKey: !!apiKey,
       timestamp: new Date().toISOString()
     });
 
-    const response = await fetch(url.toString(), { 
-      method, 
-      headers 
-    });
+    // Make request
+    const response = await fetch(url.toString(), options);
 
     if (!response.ok) {
       const errorText = await response.text();
+      logger.error('DataHub request failed', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText,
+        endpoint,
+        timestamp: new Date().toISOString()
+      });
       throw new Error(`DataHub request failed: ${response.status} - ${errorText}`);
     }
 
@@ -96,6 +107,7 @@ export async function queryDataHub(endpoint, method, params = null) {
       error: error.message,
       endpoint,
       method,
+      params,
       stack: error.stack,
       timestamp: new Date().toISOString()
     });
