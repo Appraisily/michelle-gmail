@@ -1,23 +1,39 @@
 import { logger } from '../../../utils/logger.js';
-import { MessageType, ConnectionState } from './types.js';
+import { connectionState } from './state.js';
+import { messageQueue } from './messageQueue.js';
+import { MessageType, ConnectionState, ConnectionStatus } from './types.js';
 import { v4 as uuidv4 } from 'uuid';
+
+const MAX_IMAGE_QUEUE_SIZE = 10;
+const IMAGE_PROCESSING_TIMEOUT = 30000;
 
 export class ConnectionManager {
   constructor() {
-    this.connections = new Map();
-    this.pendingMessages = new Map();
-    this.messageTimeouts = new Map();
+    this.state = connectionState;
+    this.messageQueue = messageQueue;
+    this.imageQueues = new Map();
+    this.imageTimeouts = new Map();
   }
 
   addConnection(ws, clientData) {
-    // Only add if connection is in CONNECTING or OPEN state
     if (ws.readyState <= ConnectionState.OPEN) {
-      this.connections.set(ws, {
+      // Initialize client data with pending status
+      const initializedData = {
         ...clientData,
-        pendingConfirmations: new Set(),
-        lastActivity: Date.now()
+        connectionStatus: ConnectionStatus.PENDING
+      };
+
+      this.state.addConnection(ws, initializedData);
+      this.imageQueues.set(clientData.id, new Set());
+
+      // Send connection confirmation request
+      this.sendMessage(ws, {
+        type: MessageType.CONNECT_CONFIRM,
+        clientId: clientData.id,
+        messageId: uuidv4(),
+        timestamp: new Date().toISOString()
       });
-      
+
       logger.info('New connection added', {
         clientId: clientData.id,
         readyState: ws.readyState,
@@ -32,34 +48,49 @@ export class ConnectionManager {
     }
   }
 
-  removeConnection(ws) {
-    const client = this.connections.get(ws);
+  confirmConnection(ws) {
+    const client = this.state.getConnectionInfo(ws);
     if (client) {
-      // Clear any pending message timeouts
-      client.pendingConfirmations.forEach(messageId => {
-        this.clearMessageTimeout(messageId);
+      client.connectionStatus = ConnectionStatus.CONFIRMED;
+      logger.info('Connection confirmed', {
+        clientId: client.id,
+        timestamp: new Date().toISOString()
       });
+      return true;
     }
-    this.connections.delete(ws);
+    return false;
   }
 
-  isConnectionActive(ws) {
-    if (!ws || typeof ws.readyState !== 'number') {
-      return false;
+  removeConnection(ws) {
+    const client = this.state.getConnectionInfo(ws);
+    if (client) {
+      this.messageQueue.cleanupClientMessages(client.id);
+      this.cleanupImageQueue(client.id);
+      logger.info('Connection removed', {
+        clientId: client.id,
+        readyState: ws.readyState,
+        timestamp: new Date().toISOString()
+      });
     }
+    this.state.removeConnection(ws);
+  }
 
-    const connection = this.connections.get(ws);
-    if (!connection) {
-      return false;
+  cleanupImageQueue(clientId) {
+    const queue = this.imageQueues.get(clientId);
+    if (queue) {
+      for (const imageId of queue) {
+        const timeout = this.imageTimeouts.get(imageId);
+        if (timeout) {
+          clearTimeout(timeout);
+          this.imageTimeouts.delete(imageId);
+        }
+      }
+      this.imageQueues.delete(clientId);
     }
-
-    // Check if connection is OPEN (1)
-    return ws.readyState === ConnectionState.OPEN;
   }
 
   async sendMessage(ws, message) {
     try {
-      // Double-check connection state
       if (!ws || ws.readyState !== ConnectionState.OPEN) {
         logger.warn('Cannot send message - connection not in OPEN state', {
           clientId: message.clientId,
@@ -69,8 +100,20 @@ export class ConnectionManager {
         return false;
       }
 
-      if (!this.isConnectionActive(ws)) {
-        logger.warn('Cannot send message - connection not active', {
+      const client = this.state.getConnectionInfo(ws);
+      if (!client) {
+        logger.warn('Cannot send message - no client info', {
+          clientId: message.clientId,
+          timestamp: new Date().toISOString()
+        });
+        return false;
+      }
+
+      // Only allow certain message types before confirmation
+      if (client.connectionStatus !== ConnectionStatus.CONFIRMED &&
+          message.type !== MessageType.CONNECT_CONFIRM &&
+          message.type !== MessageType.ERROR) {
+        logger.warn('Cannot send message - connection not confirmed', {
           clientId: message.clientId,
           messageType: message.type,
           timestamp: new Date().toISOString()
@@ -81,13 +124,10 @@ export class ConnectionManager {
       const messageId = message.messageId || uuidv4();
       message.messageId = messageId;
 
-      // Add to pending confirmations if not a system message
       if (message.type !== MessageType.ERROR && 
           message.type !== MessageType.PONG && 
           message.type !== MessageType.CONFIRM) {
-        const client = this.connections.get(ws);
-        client.pendingConfirmations.add(messageId);
-        this.setMessageTimeout(messageId, ws, message);
+        this.messageQueue.addPendingMessage(messageId, ws, message);
       }
 
       const serializedMessage = JSON.stringify(message);
@@ -104,8 +144,8 @@ export class ConnectionManager {
     } catch (error) {
       logger.error('Failed to send message', {
         error: error.message,
-        clientId: message.clientId,
         type: message.type,
+        clientId: message.clientId,
         stack: error.stack,
         timestamp: new Date().toISOString()
       });
@@ -114,63 +154,21 @@ export class ConnectionManager {
   }
 
   confirmMessageDelivery(ws, messageId) {
-    const client = this.connections.get(ws);
-    if (!client) return false;
-
-    if (client.pendingConfirmations.has(messageId)) {
-      client.pendingConfirmations.delete(messageId);
-      this.clearMessageTimeout(messageId);
-      return true;
-    }
-    return false;
+    return this.messageQueue.confirmDelivery(messageId);
   }
 
   updateActivity(ws) {
-    const connection = this.connections.get(ws);
-    if (connection) {
-      connection.lastActivity = Date.now();
+    if (ws && ws.readyState === ConnectionState.OPEN) {
+      this.state.updateActivity(ws);
     }
   }
 
   getConnectionInfo(ws) {
-    return this.connections.get(ws);
+    return this.state.getConnectionInfo(ws);
   }
 
   getAllConnections() {
-    return Array.from(this.connections.entries());
-  }
-
-  setMessageTimeout(messageId, ws, message) {
-    const timeout = setTimeout(() => {
-      this.handleMessageTimeout(messageId, ws, message);
-    }, 5000); // 5 second timeout
-
-    this.messageTimeouts.set(messageId, timeout);
-  }
-
-  clearMessageTimeout(messageId) {
-    const timeout = this.messageTimeouts.get(messageId);
-    if (timeout) {
-      clearTimeout(timeout);
-      this.messageTimeouts.delete(messageId);
-    }
-  }
-
-  async handleMessageTimeout(messageId, ws, message) {
-    const client = this.connections.get(ws);
-    if (!client) return;
-
-    if (client.pendingConfirmations.has(messageId)) {
-      logger.warn('Message delivery timeout', {
-        messageId,
-        clientId: message.clientId,
-        timestamp: new Date().toISOString()
-      });
-
-      // Clean up
-      client.pendingConfirmations.delete(messageId);
-      this.messageTimeouts.delete(messageId);
-    }
+    return this.state.getAllConnections();
   }
 }
 
