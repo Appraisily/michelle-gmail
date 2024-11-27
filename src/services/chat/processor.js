@@ -88,12 +88,14 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const reply = completion.choices[0].message.content;
     const responseId = uuidv4();
 
-    // Log the OpenAI response
+    // Log the full OpenAI response
     logger.info('OpenAI generated response', {
       clientId,
       messageId: responseId,
       replyTo: message.id,
       response: reply,
+      contextLength: context.length,
+      hasImages: !!message.images?.length,
       timestamp: new Date().toISOString()
     });
 
@@ -105,7 +107,9 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       clientId,
       messageId: responseId,
       replyTo: message.id,
-      contextLength: context.length
+      contextLength: context.length,
+      hasImages: !!message.images?.length,
+      timestamp: new Date().toISOString()
     });
 
     recordMetric('chat_responses_generated', 1);

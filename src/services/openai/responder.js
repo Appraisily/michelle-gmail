@@ -54,13 +54,15 @@ export async function generateResponse(
   customerData, 
   threadMessages = null, 
   imageAttachments = null,
-  companyKnowledge
+  companyKnowledge,
+  senderInfo = null // New parameter for sender information
 ) {
   try {
     logger.info('Starting response generation', {
       classification: classification.intent,
       hasCustomerData: !!customerData,
-      hasImages: !!imageAttachments
+      hasImages: !!imageAttachments,
+      hasSenderInfo: !!senderInfo
     });
 
     const openai = await getOpenAIClient();
@@ -74,17 +76,27 @@ export async function generateResponse(
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
 
+    // Add sender information to system prompt
+    const systemPrompt = agentPrompts.response(
+      classification.suggestedResponseType,
+      classification.urgency,
+      companyKnowledge
+    );
+
+    const senderContext = senderInfo ? `
+Current sender information:
+- Name: ${senderInfo.name || 'Unknown'}
+- Email: ${senderInfo.email}
+- Previous interactions: ${threadMessages?.length || 0}
+` : '';
+
     // Generate response
     const responseGeneration = await openai.chat.completions.create({
       model: MODEL,
       messages: [
         {
           role: "system",
-          content: agentPrompts.response(
-            classification.suggestedResponseType,
-            classification.urgency,
-            companyKnowledge
-          )
+          content: `${systemPrompt}\n\n${senderContext}`
         },
         {
           role: "user",
@@ -94,10 +106,21 @@ export async function generateResponse(
       temperature: 0.7
     });
 
+    const reply = responseGeneration.choices[0].message.content;
+
+    // Log the generated response
+    logger.info('OpenAI response generated', {
+      classification: classification.intent,
+      senderEmail: senderInfo?.email,
+      responseLength: reply.length,
+      response: reply,
+      timestamp: new Date().toISOString()
+    });
+
     recordMetric('replies_generated', 1);
 
     return {
-      generatedReply: responseGeneration.choices[0].message.content,
+      generatedReply: reply,
       imageAnalysis
     };
 
@@ -105,7 +128,8 @@ export async function generateResponse(
     logger.error('Error generating response:', {
       error: error.message,
       stack: error.stack,
-      classification: classification.intent
+      classification: classification.intent,
+      senderEmail: senderInfo?.email
     });
     recordMetric('response_failures', 1);
     throw error;
