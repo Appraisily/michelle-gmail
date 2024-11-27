@@ -27,6 +27,26 @@ export async function handleMessage(ws, data, client) {
       return sendMessage(ws, createMessage(MessageType.PONG, client.id));
     }
     
+    // Handle connection confirmation
+    if (message.type === MessageType.CONNECT_CONFIRM) {
+      client.connectionStatus = ConnectionStatus.CONFIRMED;
+      // Now send welcome message
+      return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
+        messageId: uuidv4(),
+        conversationId: client.conversationId,
+        content: 'Welcome! I\'m Michelle from Appraisily. How can I assist you with your art and antique appraisal needs today?'
+      }));
+    }
+
+    // Only process regular messages if connection is confirmed
+    if (client.connectionStatus !== ConnectionStatus.CONFIRMED) {
+      logger.warn('Message received before connection confirmation', {
+        clientId: client.id,
+        messageType: message.type
+      });
+      return;
+    }
+    
     // Rate limiting check
     const now = Date.now();
     if (now - client.lastMessage < RATE_LIMIT_WINDOW) {
@@ -53,15 +73,12 @@ export async function handleMessage(ws, data, client) {
       conversationId: client.conversationId
     }, client.id);
 
-    // Verify connection is still open before sending response
-    if (ws.readyState === ConnectionState.OPEN) {
-      return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
-        messageId: response.messageId,
-        content: response.content,
-        conversationId: client.conversationId,
-        replyTo: message.messageId
-      }));
-    }
+    return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
+      messageId: response.messageId,
+      content: response.content,
+      conversationId: client.conversationId,
+      replyTo: message.messageId
+    }));
 
   } catch (error) {
     logger.error('Error processing chat message', {
@@ -70,13 +87,11 @@ export async function handleMessage(ws, data, client) {
       stack: error.stack
     });
 
-    if (ws.readyState === ConnectionState.OPEN) {
-      sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
-        error: 'Failed to process message',
-        details: error.message,
-        code: 'PROCESSING_ERROR'
-      }));
-    }
+    sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
+      error: 'Failed to process message',
+      details: error.message,
+      code: 'PROCESSING_ERROR'
+    }));
   }
 }
 
@@ -104,19 +119,12 @@ export function handleConnect(ws, clientId, clientIp) {
   
   recordMetric('chat_connections', 1);
 
-  // Send connection confirmation
+  // Send connection confirmation request
   if (ws.readyState === ConnectionState.OPEN) {
     sendMessage(ws, createMessage(MessageType.CONNECT_CONFIRM, clientId, {
       messageId: uuidv4(),
       conversationId: clientData.conversationId,
-      status: ConnectionStatus.CONFIRMED
-    }));
-
-    // Only send welcome message after connection confirmation
-    sendMessage(ws, createMessage(MessageType.RESPONSE, clientId, {
-      messageId: uuidv4(),
-      conversationId: clientData.conversationId,
-      content: 'Welcome! I\'m Michelle from Appraisily. How can I assist you with your art and antique appraisal needs today?'
+      status: ConnectionStatus.PENDING
     }));
   }
   
