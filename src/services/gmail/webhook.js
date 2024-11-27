@@ -54,8 +54,7 @@ async function fetchHistory(auth, startHistoryId, pageToken = null) {
     logger.debug('History data received:', {
       hasHistory: !!history.data.history,
       messageCount: history.data.history?.length || 0,
-      hasNextPage: !!history.data.nextPageToken,
-      historyId: history.data.historyId
+      hasNextPage: !!history.data.nextPageToken
     });
 
     return history.data;
@@ -85,34 +84,12 @@ async function processHistoryItem(auth, item, retryCount = 0) {
       }))
     });
 
-    // Sort messages by timestamp, newest first
-    const sortedMessages = item.messages.sort((a, b) => {
-      return parseInt(b.internalDate || '0') - parseInt(a.internalDate || '0');
-    });
-
-    // Process latest message immediately
-    if (sortedMessages.length > 0) {
-      const latestMessage = sortedMessages[0];
-      logger.debug('Processing latest message first', {
-        messageId: latestMessage.id,
-        threadId: latestMessage.threadId
-      });
-      await processMessage(auth, latestMessage.id);
-    }
-
-    // Process remaining messages in parallel
-    if (sortedMessages.length > 1) {
-      const remainingMessages = sortedMessages.slice(1);
-      logger.debug('Processing remaining messages', {
-        count: remainingMessages.length,
-        messageIds: remainingMessages.map(m => m.id)
-      });
-      await Promise.all(
-        remainingMessages.map(message => 
-          processMessage(auth, message.id)
-        )
-      );
-    }
+    // Process messages in parallel
+    const results = await Promise.all(
+      item.messages.map(message => 
+        processMessage(auth, message.id)
+      )
+    );
 
     // Track processed history ID
     processedHistoryIds.add(item.id);
@@ -127,6 +104,7 @@ async function processHistoryItem(auth, item, retryCount = 0) {
       });
     }
 
+    return results.every(result => result === true);
   } catch (error) {
     if (retryCount < MAX_RETRIES) {
       logger.warn('Retrying history item processing', {
@@ -160,24 +138,21 @@ export async function handleWebhook(data) {
 
     logger.debug('Decoded Pub/Sub data:', {
       historyId: decodedData.historyId,
-      emailAddress: decodedData.emailAddress,
-      rawData: data.message.data
+      emailAddress: decodedData.emailAddress
     });
 
-    // Initialize lastHistoryId if not set
-    if (!lastHistoryId) {
-      lastHistoryId = await initializeHistoryId(auth);
-    }
+    // Use notification historyId as starting point if no lastHistoryId
+    const startHistoryId = lastHistoryId || decodedData.historyId;
 
     // Fetch and process history with pagination
     let pageToken = null;
     do {
       logger.info('Fetching history page', { 
-        startHistoryId: lastHistoryId,
+        startHistoryId,
         pageToken 
       });
 
-      const historyData = await fetchHistory(auth, lastHistoryId, pageToken);
+      const historyData = await fetchHistory(auth, startHistoryId, pageToken);
       
       // Handle case where history ID is invalid/expired
       if (!historyData) {

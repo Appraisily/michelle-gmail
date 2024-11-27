@@ -2,7 +2,7 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { processChat } from './processor.js';
 import { v4 as uuidv4 } from 'uuid';
-import { MessageType } from './connection/types.js';
+import { MessageType, ImageProcessingStatus } from './connection/types.js';
 import { connectionManager } from './connection/manager.js';
 import { createMessage, sendMessage, handleIncomingMessage } from './messageHandler.js';
 
@@ -35,8 +35,20 @@ export async function handleMessage(ws, data, client) {
       clientId: client.id,
       conversationId: client.conversationId,
       messageType: message.type,
-      hasContent: !!message.content
+      hasContent: !!message.content,
+      hasImages: !!message.images?.length
     });
+
+    // Send processing status for images
+    if (message.images?.length > 0) {
+      for (const image of message.images) {
+        await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
+          messageId: message.messageId,
+          imageId: image.id,
+          status: ImageProcessingStatus.PROCESSING
+        }));
+      }
+    }
 
     const response = await processChat({
       ...message,
@@ -44,11 +56,23 @@ export async function handleMessage(ws, data, client) {
       conversationId: client.conversationId
     }, client.id);
 
+    // Send analyzed status for images
+    if (message.images?.length > 0 && response?.imageAnalysis) {
+      for (const analysis of response.imageAnalysis) {
+        await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
+          messageId: message.messageId,
+          imageId: analysis.imageId,
+          status: ImageProcessingStatus.ANALYZED
+        }));
+      }
+    }
+
     return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
       messageId: response.messageId,
       content: response.content,
       conversationId: client.conversationId,
-      replyTo: message.messageId
+      replyTo: message.messageId,
+      imageAnalysis: response.imageAnalysis
     }));
 
   } catch (error) {
@@ -57,6 +81,17 @@ export async function handleMessage(ws, data, client) {
       clientId: client?.id,
       stack: error.stack
     });
+
+    // Send failed status for images
+    if (message.images?.length > 0) {
+      for (const image of message.images) {
+        await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
+          messageId: message.messageId,
+          imageId: image.id,
+          status: ImageProcessingStatus.FAILED
+        }));
+      }
+    }
 
     sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
       error: 'Failed to process message',

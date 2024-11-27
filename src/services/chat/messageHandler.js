@@ -1,7 +1,16 @@
 import { logger } from '../../utils/logger.js';
-import { MessageType } from './connection/types.js';
+import { MessageType, ImageProcessingStatus } from './connection/types.js';
 import { v4 as uuidv4 } from 'uuid';
 import { connectionManager } from './connection/manager.js';
+
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+const SUPPORTED_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/heic'
+];
 
 export function createMessage(type, clientId, data = {}) {
   return {
@@ -46,6 +55,60 @@ export async function sendMessage(ws, message) {
   }
 }
 
+function validateImage(imageData) {
+  if (!imageData.data || !imageData.mimeType || !imageData.id) {
+    return { valid: false, error: 'Missing required image data' };
+  }
+
+  if (!SUPPORTED_MIME_TYPES.includes(imageData.mimeType)) {
+    return { valid: false, error: 'Unsupported image type' };
+  }
+
+  const decoded = Buffer.from(imageData.data, 'base64');
+  if (decoded.length > MAX_IMAGE_SIZE) {
+    return { valid: false, error: 'Image too large' };
+  }
+
+  return { valid: true };
+}
+
+async function handleImageMessage(ws, message, client) {
+  if (!message.images || !Array.isArray(message.images)) {
+    return null;
+  }
+
+  const validImages = [];
+  const errors = [];
+
+  // Validate each image
+  for (const image of message.images) {
+    const validation = validateImage(image);
+    if (validation.valid) {
+      validImages.push(image);
+      
+      // Send received confirmation
+      await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
+        messageId: message.messageId,
+        imageId: image.id,
+        status: ImageProcessingStatus.RECEIVED
+      }));
+    } else {
+      errors.push({ imageId: image.id, error: validation.error });
+    }
+  }
+
+  // Send errors if any
+  if (errors.length > 0) {
+    await sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
+      messageId: uuidv4(),
+      errors,
+      code: 'IMAGE_VALIDATION_ERROR'
+    }));
+  }
+
+  return validImages;
+}
+
 export function handleIncomingMessage(ws, data, client) {
   try {
     const message = JSON.parse(data);
@@ -71,6 +134,11 @@ export function handleIncomingMessage(ws, data, client) {
       message.timestamp = new Date().toISOString();
     }
 
+    // Handle images if present
+    if (message.images) {
+      handleImageMessage(ws, message, client);
+    }
+
     // Update connection activity
     connectionManager.updateActivity(ws);
 
@@ -78,6 +146,7 @@ export function handleIncomingMessage(ws, data, client) {
       type: message.type,
       clientId: message.clientId,
       messageId: message.messageId,
+      hasImages: !!message.images?.length,
       timestamp: message.timestamp
     });
 

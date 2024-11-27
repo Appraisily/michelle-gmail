@@ -3,6 +3,7 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getOpenAIClient } from '../openai/client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
+import { ImageProcessingStatus } from './connection/types.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -40,10 +41,140 @@ function updateConversationContext(clientId, role, content, messageId) {
   }
 }
 
+async function analyzeImages(openai, images) {
+  const analyses = [];
+  
+  for (const image of images) {
+    try {
+      const analysis = await openai.chat.completions.create({
+        model: "gpt-4-vision-preview",
+        messages: [
+          {
+            role: "system",
+            content: `You are Michelle Thompson, an expert appraiser at Appraisily.
+                     Analyze this image to provide a preliminary assessment.
+                     Focus on:
+                     1. Object identification (type, period, style)
+                     2. Condition assessment
+                     3. Notable features
+                     4. Professional recommendations
+                     Never provide specific valuations.`
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Please analyze this item for appraisal:" },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:${image.mimeType};base64,${image.data}`
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 500
+      });
+
+      analyses.push({
+        imageId: image.id,
+        description: analysis.choices[0].message.content,
+        category: extractCategory(analysis.choices[0].message.content),
+        condition: extractCondition(analysis.choices[0].message.content),
+        features: extractFeatures(analysis.choices[0].message.content),
+        recommendations: extractRecommendations(analysis.choices[0].message.content)
+      });
+
+      recordMetric('image_analyses', 1);
+    } catch (error) {
+      logger.error('Error analyzing image:', {
+        error: error.message,
+        imageId: image.id,
+        stack: error.stack
+      });
+      recordMetric('image_analysis_failures', 1);
+    }
+  }
+
+  return analyses;
+}
+
+function extractCategory(content) {
+  // Simple extraction - could be enhanced with better parsing
+  const lines = content.split('\n');
+  for (const line of lines) {
+    if (line.toLowerCase().includes('type:') || 
+        line.toLowerCase().includes('category:')) {
+      return line.split(':')[1]?.trim() || 'Unknown';
+    }
+  }
+  return 'Unknown';
+}
+
+function extractCondition(content) {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    if (line.toLowerCase().includes('condition:')) {
+      return line.split(':')[1]?.trim() || 'Unknown';
+    }
+  }
+  return 'Unknown';
+}
+
+function extractFeatures(content) {
+  const features = [];
+  const lines = content.split('\n');
+  let inFeatures = false;
+
+  for (const line of lines) {
+    if (line.toLowerCase().includes('features:') || 
+        line.toLowerCase().includes('notable characteristics:')) {
+      inFeatures = true;
+      continue;
+    }
+    if (inFeatures && line.trim() && !line.includes(':')) {
+      features.push(line.trim());
+    }
+    if (inFeatures && line.includes(':') && !line.toLowerCase().includes('feature')) {
+      inFeatures = false;
+    }
+  }
+
+  return features;
+}
+
+function extractRecommendations(content) {
+  const recommendations = [];
+  const lines = content.split('\n');
+  let inRecommendations = false;
+
+  for (const line of lines) {
+    if (line.toLowerCase().includes('recommend')) {
+      inRecommendations = true;
+      recommendations.push(line.trim());
+      continue;
+    }
+    if (inRecommendations && line.trim() && !line.includes(':')) {
+      recommendations.push(line.trim());
+    }
+    if (inRecommendations && line.includes(':') && !line.toLowerCase().includes('recommend')) {
+      inRecommendations = false;
+    }
+  }
+
+  return recommendations;
+}
+
 async function processWithRetry(message, clientId, retryCount = 0) {
   try {
     const openai = await getOpenAIClient();
     const context = getConversationContext(clientId);
+
+    // Process images if present
+    let imageAnalyses = [];
+    if (message.images && message.images.length > 0) {
+      imageAnalyses = await analyzeImages(openai, message.images);
+    }
 
     // Format conversation history for OpenAI
     const messages = [
@@ -59,7 +190,8 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Guide customers towards appropriate appraisal services
                  - Never provide specific valuations in chat
                  - Maintain conversation context
-                 - Keep responses concise but helpful`
+                 - Keep responses concise but helpful
+                 ${imageAnalyses.length > 0 ? '- Reference the analyzed images in your response' : ''}`
       },
       ...context.map(msg => ({
         role: msg.role === "assistant" ? "assistant" : "user",
@@ -67,18 +199,16 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       })),
       {
         role: "user",
-        content: message.content
+        content: message.content + (imageAnalyses.length > 0 ? 
+          '\n\nImage Analysis Results:\n' + 
+          imageAnalyses.map(analysis => 
+            `Image Analysis:\n${analysis.description}`
+          ).join('\n\n') : '')
       }
     ];
 
-    logger.debug('Sending chat request to OpenAI', {
-      clientId,
-      messageCount: messages.length,
-      latestMessage: message.content
-    });
-
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4",
       messages,
       temperature: 0.7,
       max_tokens: 500
@@ -95,7 +225,8 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       clientId,
       messageId: responseId,
       replyTo: message.id,
-      contextLength: context.length
+      contextLength: context.length,
+      hasImages: imageAnalyses.length > 0
     });
 
     recordMetric('chat_responses_generated', 1);
@@ -104,6 +235,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       type: 'response',
       messageId: responseId,
       content: reply,
+      imageAnalysis: imageAnalyses,
       timestamp: new Date().toISOString()
     };
 
@@ -134,7 +266,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
 export async function processChat(message, clientId) {
   try {
     // Skip processing for non-chat messages
-    if (!message.content) {
+    if (!message.content && !message.images?.length) {
       return null;
     }
 
