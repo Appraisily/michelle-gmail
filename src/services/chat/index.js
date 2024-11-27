@@ -1,7 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { logger } from '../../utils/logger.js';
 import { handleMessage, handleConnect, handleDisconnect } from './handlers.js';
-import { setupHeartbeat, handlePong, HEARTBEAT_INTERVAL } from './heartbeat.js';
+import { setupHeartbeat, handlePong } from './heartbeat.js';
 import { connectionManager } from './connection/manager.js';
 import { ConnectionState } from './connection/types.js';
 
@@ -35,25 +35,15 @@ export function initializeChatService(server) {
             logger.warn('Rejecting duplicate connection attempt', {
               clientId: message.clientId,
               timeSinceLastConnect,
-              ip: clientIp
+              ip: clientIp,
+              timestamp: new Date().toISOString()
             });
             ws.close(1008, 'Duplicate connection');
             return;
           }
         }
 
-        // Clean up any existing connection for this client
-        const existingConnection = connectionManager.getConnectionInfo(ws);
-        if (existingConnection) {
-          logger.info('Cleaning up existing connection', {
-            clientId: message.clientId,
-            previousConversationId: existingConnection.conversationId
-          });
-          handleDisconnect(existingConnection);
-          connectionManager.removeConnection(ws);
-        }
-
-        // Initialize client data and send welcome message
+        // Initialize client data and add connection
         clientData = handleConnect(ws, message.clientId, clientIp);
 
         // Track this connection
@@ -80,7 +70,8 @@ export function initializeChatService(server) {
             logger.error('Error handling message', {
               error: error.message,
               clientId: clientData?.id,
-              stack: error.stack
+              stack: error.stack,
+              timestamp: new Date().toISOString()
             });
           }
         });
@@ -89,7 +80,8 @@ export function initializeChatService(server) {
         logger.error('Invalid connection attempt', {
           error: error.message,
           ip: clientIp,
-          data: data.toString()
+          data: data.toString(),
+          timestamp: new Date().toISOString()
         });
         ws.terminate();
       }
@@ -114,7 +106,10 @@ export function initializeChatService(server) {
     // Set connection timeout if no connect message received
     const connectionTimeout = setTimeout(() => {
       if (!clientData) {
-        logger.warn('Client failed to send connect message', { ip: clientIp });
+        logger.warn('Client failed to send connect message', { 
+          ip: clientIp,
+          timestamp: new Date().toISOString()
+        });
         ws.terminate();
       }
     }, CONNECTION_TIMEOUT);
@@ -144,9 +139,6 @@ export function initializeChatService(server) {
   });
 
   logger.info('Chat service initialized', {
-    heartbeatInterval: HEARTBEAT_INTERVAL,
-    connectionTimeout: CONNECTION_TIMEOUT,
-    reconnectWindow: RECONNECT_WINDOW,
     timestamp: new Date().toISOString()
   });
 }
