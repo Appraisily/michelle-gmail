@@ -14,7 +14,8 @@ export async function handleMessage(ws, data, client) {
     if (ws.readyState !== ConnectionState.OPEN) {
       logger.warn('Attempted to handle message on non-open connection', {
         clientId: client?.id,
-        readyState: ws.readyState
+        readyState: ws.readyState,
+        timestamp: new Date().toISOString()
       });
       return;
     }
@@ -29,7 +30,12 @@ export async function handleMessage(ws, data, client) {
     // Handle connection confirmation
     if (message.type === MessageType.CONNECT_CONFIRM) {
       client.connectionStatus = ConnectionStatus.CONFIRMED;
-      // Now send welcome message
+      logger.info('Connection confirmed', {
+        clientId: client.id,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Send welcome message after confirmation
       return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
         messageId: uuidv4(),
         conversationId: client.conversationId,
@@ -41,7 +47,8 @@ export async function handleMessage(ws, data, client) {
     if (client.connectionStatus !== ConnectionStatus.CONFIRMED) {
       logger.warn('Message received before connection confirmation', {
         clientId: client.id,
-        messageType: message.type
+        messageType: message.type,
+        timestamp: new Date().toISOString()
       });
       return;
     }
@@ -61,6 +68,14 @@ export async function handleMessage(ws, data, client) {
 
     // Process message
     if (message.type === MessageType.MESSAGE) {
+      logger.info('Processing chat message', {
+        clientId: client.id,
+        conversationId: client.conversationId,
+        hasContent: !!message.content,
+        messageType: message.type,
+        timestamp: new Date().toISOString()
+      });
+
       // Send confirmation
       await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
         messageId: message.messageId
@@ -81,7 +96,8 @@ export async function handleMessage(ws, data, client) {
     logger.error('Error handling message:', {
       error: error.message,
       clientId: client?.id,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
 
     if (ws.readyState === ConnectionState.OPEN) {

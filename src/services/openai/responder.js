@@ -39,8 +39,16 @@ async function analyzeImages(openai, imageAttachments, companyKnowledge) {
       temperature: 0.7
     });
 
+    const analysis = imageAnalysisResponse.choices[0].message.content;
+    
+    logger.info('Image analysis completed', {
+      imageCount: imageAttachments.length,
+      analysisLength: analysis.length,
+      analysis: analysis // Log the full analysis
+    });
+
     recordMetric('image_analyses', 1);
-    return imageAnalysisResponse.choices[0].message.content;
+    return analysis;
   } catch (error) {
     logger.error('Error analyzing images:', error);
     recordMetric('image_analysis_failures', 1);
@@ -55,14 +63,16 @@ export async function generateResponse(
   threadMessages = null, 
   imageAttachments = null,
   companyKnowledge,
-  senderInfo = null // New parameter for sender information
+  senderInfo = null
 ) {
   try {
     logger.info('Starting response generation', {
       classification: classification.intent,
       hasCustomerData: !!customerData,
       hasImages: !!imageAttachments,
-      hasSenderInfo: !!senderInfo
+      hasSenderInfo: !!senderInfo,
+      senderEmail: senderInfo?.email,
+      senderName: senderInfo?.name
     });
 
     const openai = await getOpenAIClient();
@@ -108,12 +118,14 @@ Current sender information:
 
     const reply = responseGeneration.choices[0].message.content;
 
-    // Log the generated response
+    // Log the complete response for monitoring
     logger.info('OpenAI response generated', {
       classification: classification.intent,
       senderEmail: senderInfo?.email,
       responseLength: reply.length,
-      response: reply,
+      response: reply, // Log the full response
+      hasImages: !!imageAttachments,
+      hasThreadContext: !!threadMessages,
       timestamp: new Date().toISOString()
     });
 
