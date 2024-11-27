@@ -2,21 +2,27 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { agentPrompts } from './agentPrompts.js';
 import { getOpenAIClient } from './client.js';
-import { dataHubClient } from '../dataHub/client.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o';
 
 async function getAvailableEndpoints() {
   try {
-    const apiInfo = await dataHubClient.fetchEndpoints();
+    // Make unauthenticated request to fetch endpoints
+    const response = await fetch('https://data-hub-856401495068.us-central1.run.app/api/endpoints');
+    if (!response.ok) {
+      throw new Error(`Failed to fetch endpoints: ${response.status}`);
+    }
+    const data = await response.json();
+
     logger.info('Fetched Data Hub endpoints', {
-      endpointCount: apiInfo.endpoints?.length,
-      authentication: apiInfo.authentication?.type,
-      rateLimiting: apiInfo.rateLimiting?.requestsPerWindow,
+      endpointCount: data.endpoints?.length,
+      authentication: data.authentication?.type,
+      rateLimiting: data.rateLimiting?.requestsPerWindow,
       timestamp: new Date().toISOString()
     });
-    return apiInfo.endpoints || [];
+
+    return data.endpoints || [];
   } catch (error) {
     logger.error('Failed to fetch endpoints:', {
       error: error.message,
@@ -27,19 +33,33 @@ async function getAvailableEndpoints() {
   }
 }
 
-async function queryDataHub(endpoint, method, params = null, body = null) {
+async function queryDataHub(endpoint, method, params = null) {
   try {
-    const data = await dataHubClient.makeRequest(endpoint, method, params, body);
-    logger.info('Data Hub query successful', {
+    const url = new URL(`https://data-hub-856401495068.us-central1.run.app${endpoint}`);
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== null && value !== undefined) {
+          url.searchParams.append(key, value);
+        }
+      });
+    }
+
+    const response = await fetch(url.toString(), { method });
+    if (!response.ok) {
+      throw new Error(`DataHub request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    logger.info('DataHub query successful', {
       endpoint,
       method,
       hasParams: !!params,
-      hasBody: !!body,
       timestamp: new Date().toISOString()
     });
+
     return data;
   } catch (error) {
-    logger.error('Data Hub query failed:', {
+    logger.error('DataHub query failed:', {
       error: error.message,
       endpoint,
       method,
@@ -65,8 +85,6 @@ export async function generateResponse(
       hasCustomerData: !!customerData,
       hasImages: !!imageAttachments,
       hasSenderInfo: !!senderInfo,
-      senderEmail: senderInfo?.email,
-      senderName: senderInfo?.name,
       timestamp: new Date().toISOString()
     });
 
@@ -105,7 +123,7 @@ ${endpoints.map(e => `- ${e.method} ${e.path}: ${e.description}`).join('\n')}
 
 You can query these endpoints to get additional information when needed.`;
 
-    // Generate response
+    // Generate response with function calling
     const responseGeneration = await openai.chat.completions.create({
       model: MODEL,
       messages: [
@@ -130,24 +148,74 @@ You can query these endpoints to get additional information when needed.`;
             },
             method: {
               type: "string",
-              enum: ["GET", "POST", "PUT", "DELETE"]
+              enum: ["GET"]
             },
             params: {
               type: "object",
-              description: "Query parameters"
-            },
-            body: {
-              type: "object",
-              description: "Request body for POST/PUT"
+              description: "Query parameters",
+              properties: {
+                email: {
+                  type: "string",
+                  description: "Customer email address"
+                },
+                sessionId: {
+                  type: "string",
+                  description: "Session ID"
+                },
+                wordpressSlug: {
+                  type: "string",
+                  description: "WordPress URL slug"
+                }
+              }
             }
           },
           required: ["endpoint", "method"]
         }
       }],
+      function_call: "auto",
       temperature: 0.7
     });
 
-    const reply = responseGeneration.choices[0].message.content;
+    // Handle function calls if any
+    let reply = '';
+    for (const message of responseGeneration.choices) {
+      if (message.message.function_call) {
+        const functionCall = message.message.function_call;
+        const args = JSON.parse(functionCall.arguments);
+
+        // Execute the function call
+        const result = await queryDataHub(args.endpoint, args.method, args.params);
+
+        // Get completion with function result
+        const functionResponse = await openai.chat.completions.create({
+          model: MODEL,
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt
+            },
+            {
+              role: "user",
+              content: fullContext
+            },
+            {
+              role: "assistant",
+              content: "Let me check the available information."
+            },
+            {
+              role: "function",
+              name: "queryDataHub",
+              content: JSON.stringify(result)
+            }
+          ],
+          temperature: 0.7
+        });
+
+        reply = functionResponse.choices[0].message.content;
+      } else {
+        reply = message.message.content;
+      }
+    }
 
     // Log the complete response for monitoring
     logger.info('OpenAI response generated', {
@@ -172,7 +240,6 @@ You can query these endpoints to get additional information when needed.`;
       error: error.message,
       stack: error.stack,
       classification: classification.intent,
-      senderEmail: senderInfo?.email,
       timestamp: new Date().toISOString()
     });
     recordMetric('response_failures', 1);
