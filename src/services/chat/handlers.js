@@ -28,7 +28,7 @@ export async function handleMessage(ws, data, client) {
     }
 
     // Handle connection confirmation
-    if (message.type === MessageType.CONNECT_CONFIRM) {
+    if (message.type === MessageType.CONFIRM && client.connectionStatus === ConnectionStatus.PENDING) {
       client.connectionStatus = ConnectionStatus.CONFIRMED;
       logger.info('Connection confirmed', {
         clientId: client.id,
@@ -135,11 +135,7 @@ export function handleConnect(ws, clientId, clientIp) {
 
   // Send connection confirmation request
   if (ws.readyState === ConnectionState.OPEN) {
-    sendMessage(ws, createMessage(MessageType.CONNECT_CONFIRM, clientId, {
-      messageId: uuidv4(),
-      conversationId: clientData.conversationId,
-      status: ConnectionStatus.PENDING
-    }));
+    sendMessage(ws, createMessage(MessageType.CONNECT_CONFIRM, clientId));
   }
   
   return clientData;
