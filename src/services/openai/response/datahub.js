@@ -2,14 +2,19 @@ import { logger } from '../../../utils/logger.js';
 import { getSecrets } from '../../../utils/secretManager.js';
 
 const DATA_HUB_API = 'https://data-hub-856401495068.us-central1.run.app';
-let apiKey = null;
+let apiKeyPromise = null;
 
+// Lazy load API key only when needed
 async function getApiKey() {
-  if (!apiKey) {
-    const secrets = await getSecrets();
-    apiKey = secrets.DATA_HUB_API_KEY;
+  if (!apiKeyPromise) {
+    apiKeyPromise = getSecrets().then(secrets => {
+      if (!secrets.DATA_HUB_API_KEY) {
+        throw new Error('DATA_HUB_API_KEY not found in secrets');
+      }
+      return secrets.DATA_HUB_API_KEY;
+    });
   }
-  return apiKey;
+  return apiKeyPromise;
 }
 
 export async function getAvailableEndpoints() {
@@ -61,6 +66,7 @@ export async function queryDataHub(endpoint, method, params = null) {
       endpoint,
       method,
       hasParams: !!params,
+      hasApiKey: !!key,
       timestamp: new Date().toISOString()
     });
 
@@ -70,7 +76,8 @@ export async function queryDataHub(endpoint, method, params = null) {
     });
 
     if (!response.ok) {
-      throw new Error(`DataHub request failed: ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`DataHub request failed: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
