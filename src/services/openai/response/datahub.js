@@ -4,6 +4,13 @@ import { getSecrets } from '../../../utils/secretManager.js';
 const DATA_HUB_API = 'https://data-hub-856401495068.us-central1.run.app';
 let apiKeyPromise = null;
 
+// Safely mask an API key for logging
+function maskApiKey(key) {
+  if (!key) return 'undefined';
+  if (key.length < 8) return '***';
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
 // Lazy load API key only when needed
 async function getApiKey() {
   if (!apiKeyPromise) {
@@ -59,27 +66,43 @@ export async function queryDataHub(endpoint, method, params = null) {
       });
     }
 
-    // Prepare request options with explicit headers
-    const options = {
-      method,
-      headers: {
-        'X-API-Key': apiKey,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
-      }
+    // Log headers being sent (safely)
+    const headers = {
+      'X-API-Key': apiKey,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
     };
 
-    logger.debug('Making DataHub request', {
+    logger.debug('DataHub request headers', {
       url: url.toString(),
       method,
-      hasParams: !!params,
-      hasApiKey: !!apiKey,
-      headers: Object.keys(options.headers),
+      headers: {
+        ...headers,
+        'X-API-Key': maskApiKey(headers['X-API-Key'])
+      },
       timestamp: new Date().toISOString()
     });
 
+    // Prepare request options
+    const options = {
+      method,
+      headers
+    };
+
     // Make request
     const response = await fetch(url.toString(), options);
+
+    // Log response headers for debugging
+    const responseHeaders = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+
+    logger.debug('DataHub response headers', {
+      status: response.status,
+      headers: responseHeaders,
+      timestamp: new Date().toISOString()
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -88,9 +111,13 @@ export async function queryDataHub(endpoint, method, params = null) {
         statusText: response.statusText,
         error: errorText,
         endpoint,
+        requestHeaders: {
+          ...headers,
+          'X-API-Key': maskApiKey(headers['X-API-Key'])
+        },
         timestamp: new Date().toISOString()
       });
-      throw new Error(`DataHub request failed: ${response.status} - ${errorText}`);
+      throw new Error(`DataHub request failed: ${response.status}`);
     }
 
     const data = await response.json();
