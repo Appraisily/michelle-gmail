@@ -4,6 +4,7 @@ import { processChat } from './processor.js';
 import { v4 as uuidv4 } from 'uuid';
 import { MessageType, ConnectionState, ConnectionStatus } from './connection/types.js';
 import { connectionManager } from './connection/manager.js';
+import { reconnectionManager } from './connection/reconnect.js';
 import { createMessage, sendMessage } from './messageHandler.js';
 
 export const RATE_LIMIT_WINDOW = 1000; // 1 second between messages
@@ -30,6 +31,9 @@ export async function handleMessage(ws, data, client) {
     // Handle connection confirmation
     if (message.type === MessageType.CONFIRM && client.connectionStatus === ConnectionStatus.PENDING) {
       client.connectionStatus = ConnectionStatus.CONFIRMED;
+      // Reset reconnection state on successful connection
+      reconnectionManager.resetState(client.id);
+      
       logger.info('Connection confirmed', {
         clientId: client.id,
         timestamp: new Date().toISOString()
@@ -110,7 +114,34 @@ export async function handleMessage(ws, data, client) {
 }
 
 export function handleConnect(ws, clientId, clientIp) {
-  // Create client data first
+  // Check reconnection status
+  const reconnectStatus = reconnectionManager.canReconnect(clientId);
+  
+  if (!reconnectStatus.allowed) {
+    if (reconnectStatus.reason === 'TOO_SOON') {
+      logger.warn('Rejecting connection attempt - too soon', {
+        clientId,
+        waitTime: reconnectStatus.waitTime,
+        timestamp: new Date().toISOString()
+      });
+      ws.close(1013, `Wait ${reconnectStatus.waitTime}ms before reconnecting`);
+      return null;
+    }
+    
+    if (reconnectStatus.reason === 'MAX_RETRIES_EXCEEDED') {
+      logger.warn('Rejecting connection attempt - max retries exceeded', {
+        clientId,
+        timestamp: new Date().toISOString()
+      });
+      ws.close(1013, 'Maximum reconnection attempts exceeded');
+      return null;
+    }
+  }
+
+  // Record reconnection attempt
+  reconnectionManager.recordAttempt(clientId);
+
+  // Create client data
   const clientData = {
     id: clientId,
     ip: clientIp,
@@ -121,7 +152,7 @@ export function handleConnect(ws, clientId, clientIp) {
     connectionStatus: ConnectionStatus.PENDING
   };
 
-  // Add to connection manager before any async operations
+  // Add to connection manager
   connectionManager.addConnection(ws, clientData);
 
   logger.info('Chat client connected', { 

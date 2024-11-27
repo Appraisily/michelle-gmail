@@ -62,7 +62,8 @@ export async function generateResponse(
       hasImages: !!imageAttachments,
       hasSenderInfo: !!senderInfo,
       senderEmail: senderInfo?.email,
-      senderName: senderInfo?.name
+      senderName: senderInfo?.name,
+      timestamp: new Date().toISOString()
     });
 
     const openai = await getOpenAIClient();
@@ -75,9 +76,8 @@ export async function generateResponse(
     const endpoints = await getAvailableEndpoints();
 
     // Format thread context safely
-    const threadContext = threadMessages && Array.isArray(threadMessages) && threadMessages.length > 0 
-      ? formatThreadForPrompt(threadMessages) 
-      : '';
+    const threadContext = threadMessages && Array.isArray(threadMessages) ? 
+      formatThreadForPrompt(threadMessages) : '';
 
     const fullContext = threadContext 
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
@@ -94,6 +94,7 @@ Current sender information:
 - Name: ${senderInfo?.name || 'Unknown'}
 - Email: ${senderInfo?.email}
 - Previous interactions: ${threadMessages?.length || 0}
+- Message type: ${threadMessages?.length ? 'Follow-up message' : 'First contact'}
 
 Available DataHub endpoints:
 ${endpoints.map(e => `- ${e.method} ${e.path}: ${e.description}`).join('\n')}
@@ -167,7 +168,8 @@ You can query these endpoints to get additional information when needed.`;
       error: error.message,
       stack: error.stack,
       classification: classification.intent,
-      senderEmail: senderInfo?.email
+      senderEmail: senderInfo?.email,
+      timestamp: new Date().toISOString()
     });
     recordMetric('response_failures', 1);
     throw error;
@@ -201,7 +203,8 @@ async function analyzeImages(openai, imageAttachments, companyKnowledge) {
     logger.info('Image analysis completed', {
       imageCount: imageAttachments.length,
       analysisLength: analysis.length,
-      analysis
+      analysis,
+      timestamp: new Date().toISOString()
     });
 
     recordMetric('image_analyses', 1);
@@ -209,7 +212,8 @@ async function analyzeImages(openai, imageAttachments, companyKnowledge) {
   } catch (error) {
     logger.error('Error analyzing images:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     recordMetric('image_analysis_failures', 1);
     return null;

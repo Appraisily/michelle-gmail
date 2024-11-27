@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
-const MESSAGE_TIMEOUT = 5000; // 5 seconds
+const MESSAGE_TIMEOUT = 10000; // 10 seconds (increased from 5000)
 
 export class MessageQueue {
   constructor() {
@@ -63,7 +63,8 @@ export class MessageQueue {
       logger.warn('Message delivery timeout, attempting retry', {
         messageId,
         clientId: message.clientId,
-        retryCount
+        retryCount,
+        timestamp: new Date().toISOString()
       });
 
       await this.retryMessage(ws, message, retryCount);
@@ -71,7 +72,8 @@ export class MessageQueue {
       this.cleanupMessage(messageId);
       logger.error('Message delivery failed after retries', {
         messageId,
-        clientId: message.clientId
+        clientId: message.clientId,
+        timestamp: new Date().toISOString()
       });
     }
   }
@@ -97,13 +99,15 @@ export class MessageQueue {
       logger.info('Message retry attempt', {
         messageId: message.messageId,
         clientId: message.clientId,
-        retryCount: retryCount + 1
+        retryCount: retryCount + 1,
+        timestamp: new Date().toISOString()
       });
     } catch (error) {
       logger.error('Message retry failed', {
         error: error.message,
         messageId: message.messageId,
-        clientId: message.clientId
+        clientId: message.clientId,
+        timestamp: new Date().toISOString()
       });
     }
   }
@@ -116,7 +120,10 @@ export class MessageQueue {
     this.clearMessageTimeout(messageId);
     this.pendingMessages.delete(messageId);
     
-    logger.debug('Message delivery confirmed', { messageId });
+    logger.debug('Message delivery confirmed', { 
+      messageId,
+      timestamp: new Date().toISOString()
+    });
   }
 
   /**
