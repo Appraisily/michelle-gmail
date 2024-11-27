@@ -74,8 +74,11 @@ export async function generateResponse(
     // Get available DataHub endpoints
     const endpoints = await getAvailableEndpoints();
 
-    // Format thread context
-    const threadContext = threadMessages ? formatThreadForPrompt(threadMessages) : '';
+    // Format thread context safely
+    const threadContext = threadMessages && Array.isArray(threadMessages) && threadMessages.length > 0 
+      ? formatThreadForPrompt(threadMessages) 
+      : '';
+
     const fullContext = threadContext 
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
@@ -223,7 +226,9 @@ function formatImageAttachments(imageAttachments) {
 }
 
 function formatThreadForPrompt(threadMessages) {
-  if (!threadMessages || threadMessages.length === 0) return '';
+  if (!threadMessages || !Array.isArray(threadMessages) || threadMessages.length === 0) {
+    return '';
+  }
 
   return threadMessages
     .map(msg => {
