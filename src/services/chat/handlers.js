@@ -2,7 +2,7 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { processChat } from './processor.js';
 import { v4 as uuidv4 } from 'uuid';
-import { MessageType, ImageProcessingStatus } from './connection/types.js';
+import { MessageType } from './connection/types.js';
 import { connectionManager } from './connection/manager.js';
 import { createMessage, sendMessage, handleIncomingMessage } from './messageHandler.js';
 
@@ -35,20 +35,8 @@ export async function handleMessage(ws, data, client) {
       clientId: client.id,
       conversationId: client.conversationId,
       messageType: message.type,
-      hasContent: !!message.content,
-      hasImages: !!message.images?.length
+      hasContent: !!message.content
     });
-
-    // Send processing status for images
-    if (message.images?.length > 0) {
-      for (const image of message.images) {
-        await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
-          messageId: message.messageId,
-          imageId: image.id,
-          status: ImageProcessingStatus.PROCESSING
-        }));
-      }
-    }
 
     const response = await processChat({
       ...message,
@@ -56,23 +44,11 @@ export async function handleMessage(ws, data, client) {
       conversationId: client.conversationId
     }, client.id);
 
-    // Send analyzed status for images
-    if (message.images?.length > 0 && response?.imageAnalysis) {
-      for (const analysis of response.imageAnalysis) {
-        await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
-          messageId: message.messageId,
-          imageId: analysis.imageId,
-          status: ImageProcessingStatus.ANALYZED
-        }));
-      }
-    }
-
     return sendMessage(ws, createMessage(MessageType.RESPONSE, client.id, {
       messageId: response.messageId,
       content: response.content,
       conversationId: client.conversationId,
-      replyTo: message.messageId,
-      imageAnalysis: response.imageAnalysis
+      replyTo: message.messageId
     }));
 
   } catch (error) {
@@ -81,17 +57,6 @@ export async function handleMessage(ws, data, client) {
       clientId: client?.id,
       stack: error.stack
     });
-
-    // Send failed status for images
-    if (message.images?.length > 0) {
-      for (const image of message.images) {
-        await sendMessage(ws, createMessage(MessageType.CONFIRM, client.id, {
-          messageId: message.messageId,
-          imageId: image.id,
-          status: ImageProcessingStatus.FAILED
-        }));
-      }
-    }
 
     sendMessage(ws, createMessage(MessageType.ERROR, client.id, {
       error: 'Failed to process message',
@@ -102,38 +67,38 @@ export async function handleMessage(ws, data, client) {
 }
 
 export function handleConnect(ws, clientId, clientIp) {
-  // Wait for connection to be fully established
-  setTimeout(() => {
-    const clientData = {
-      id: clientId,
-      ip: clientIp,
-      isAlive: true,
-      lastMessage: Date.now(),
-      messageCount: 0,
-      conversationId: uuidv4()
-    };
+  // Create client data first
+  const clientData = {
+    id: clientId,
+    ip: clientIp,
+    isAlive: true,
+    lastMessage: Date.now(),
+    messageCount: 0,
+    conversationId: uuidv4()
+  };
 
-    logger.info('Chat client connected', { 
-      clientId: clientData.id,
-      conversationId: clientData.conversationId,
-      ip: clientIp,
-      timestamp: new Date().toISOString()
-    });
-    
-    recordMetric('chat_connections', 1);
+  // Add to connection manager before any async operations
+  connectionManager.addConnection(ws, clientData);
 
-    // Add connection first
-    connectionManager.addConnection(ws, clientData);
+  logger.info('Chat client connected', { 
+    clientId: clientData.id,
+    conversationId: clientData.conversationId,
+    ip: clientIp,
+    timestamp: new Date().toISOString()
+  });
+  
+  recordMetric('chat_connections', 1);
 
-    // Then send welcome message
+  // Send welcome message only if connection is still open
+  if (ws.readyState === 1) { // WebSocket.OPEN
     sendMessage(ws, createMessage(MessageType.RESPONSE, clientId, {
       messageId: uuidv4(),
       conversationId: clientData.conversationId,
       content: 'Welcome! I\'m Michelle from Appraisily. How can I assist you with your art and antique appraisal needs today?'
     }));
-    
-    return clientData;
-  }, 100); // Small delay to ensure connection is ready
+  }
+  
+  return clientData;
 }
 
 export function handleDisconnect(client) {
