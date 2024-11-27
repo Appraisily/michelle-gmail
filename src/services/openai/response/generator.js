@@ -68,25 +68,35 @@ export async function generateResponse(
       ],
       functions: [{
         name: "queryDataHub",
-        description: "Query DataHub API endpoints to get additional information",
+        description: "Query DataHub API endpoints to get customer information",
         parameters: {
           type: "object",
           properties: {
             endpoint: {
               type: "string",
-              description: "The endpoint path to query"
+              description: "The endpoint path to query (e.g., /api/appraisals/pending)"
             },
             method: {
               type: "string",
-              enum: ["GET"]
+              enum: ["GET"],
+              description: "HTTP method to use"
             },
             params: {
               type: "object",
               description: "Query parameters",
               properties: {
-                email: { type: "string" },
-                sessionId: { type: "string" },
-                wordpressSlug: { type: "string" }
+                email: {
+                  type: "string",
+                  description: "Customer email address"
+                },
+                sessionId: {
+                  type: "string",
+                  description: "Session ID for specific queries"
+                },
+                wordpressSlug: {
+                  type: "string",
+                  description: "WordPress URL slug"
+                }
               }
             }
           },
@@ -97,44 +107,86 @@ export async function generateResponse(
       temperature: 0.7
     });
 
-    // Handle function calls if any
+    // Handle function calls and generate final response
+    let customerInfo = null;
     let reply = '';
-    for (const message of responseGeneration.choices) {
-      if (message.message.function_call) {
-        const functionCall = message.message.function_call;
+
+    for (const choice of responseGeneration.choices) {
+      const message = choice.message;
+
+      if (message.function_call) {
+        const functionCall = message.function_call;
         const args = JSON.parse(functionCall.arguments);
 
-        // Execute the function call
-        const result = await queryDataHub(args.endpoint, args.method, args.params);
-
-        // Get completion with function result
-        const functionResponse = await openai.chat.completions.create({
-          model: MODEL,
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt
-            },
-            {
-              role: "user",
-              content: fullContext
-            },
-            {
-              role: "assistant",
-              content: "Let me check the available information."
-            },
-            {
-              role: "function",
-              name: "queryDataHub",
-              content: JSON.stringify(result)
-            }
-          ],
-          temperature: 0.7
+        logger.info('DataHub query requested', {
+          endpoint: args.endpoint,
+          method: args.method,
+          params: args.params,
+          timestamp: new Date().toISOString()
         });
 
-        reply = functionResponse.choices[0].message.content;
+        // Execute the function call
+        try {
+          customerInfo = await queryDataHub(args.endpoint, args.method, args.params);
+
+          // Get completion with function result
+          const functionResponse = await openai.chat.completions.create({
+            model: MODEL,
+            messages: [
+              {
+                role: "system",
+                content: systemPrompt
+              },
+              {
+                role: "user",
+                content: fullContext
+              },
+              {
+                role: "assistant",
+                content: "Let me check your records."
+              },
+              {
+                role: "function",
+                name: "queryDataHub",
+                content: JSON.stringify(customerInfo)
+              }
+            ],
+            temperature: 0.7
+          });
+
+          reply = functionResponse.choices[0].message.content;
+        } catch (error) {
+          logger.error('Error querying DataHub:', {
+            error: error.message,
+            endpoint: args.endpoint,
+            stack: error.stack,
+            timestamp: new Date().toISOString()
+          });
+
+          // Generate response acknowledging the error
+          const errorResponse = await openai.chat.completions.create({
+            model: MODEL,
+            messages: [
+              {
+                role: "system",
+                content: systemPrompt
+              },
+              {
+                role: "user",
+                content: fullContext
+              },
+              {
+                role: "assistant",
+                content: "I encountered an error while trying to access your records."
+              }
+            ],
+            temperature: 0.7
+          });
+
+          reply = errorResponse.choices[0].message.content;
+        }
       } else {
-        reply = message.message.content;
+        reply = message.content;
       }
     }
 
@@ -143,7 +195,7 @@ export async function generateResponse(
       classification: classification.intent,
       senderEmail: senderInfo?.email,
       responseLength: reply.length,
-      response: reply,
+      hasCustomerInfo: !!customerInfo,
       hasImages: !!imageAttachments,
       hasThreadContext: !!threadMessages,
       timestamp: new Date().toISOString()
@@ -153,7 +205,8 @@ export async function generateResponse(
 
     return {
       generatedReply: reply,
-      imageAnalysis
+      imageAnalysis,
+      customerInfo
     };
 
   } catch (error) {
