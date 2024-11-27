@@ -1,7 +1,7 @@
 import { logger } from '../../../utils/logger.js';
 import { ConnectionState } from './types.js';
 
-export class ConnectionState {
+export class ConnectionStateManager {
   constructor() {
     this.connections = new Map();
   }
@@ -117,4 +117,4 @@ export class ConnectionState {
   }
 }
 
-export const connectionState = new ConnectionState();
+export const connectionState = new ConnectionStateManager();
