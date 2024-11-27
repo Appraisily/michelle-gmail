@@ -6,11 +6,6 @@ export class ConnectionStateManager {
     this.connections = new Map();
   }
 
-  /**
-   * Add a new client connection
-   * @param {WebSocket} ws WebSocket connection
-   * @param {ClientData} clientData Client information
-   */
   addConnection(ws, clientData) {
     this.connections.set(ws, {
       ...clientData,
@@ -24,10 +19,6 @@ export class ConnectionStateManager {
     });
   }
 
-  /**
-   * Remove a client connection
-   * @param {WebSocket} ws WebSocket connection
-   */
   removeConnection(ws) {
     const client = this.connections.get(ws);
     if (client) {
@@ -39,11 +30,6 @@ export class ConnectionStateManager {
     this.connections.delete(ws);
   }
 
-  /**
-   * Check if connection is active
-   * @param {WebSocket} ws WebSocket connection
-   * @returns {boolean}
-   */
   isConnectionActive(ws) {
     if (!ws || typeof ws.readyState !== 'number') {
       return false;
@@ -66,10 +52,6 @@ export class ConnectionStateManager {
     return isOpen;
   }
 
-  /**
-   * Update client activity timestamp
-   * @param {WebSocket} ws WebSocket connection
-   */
   updateActivity(ws) {
     const connection = this.connections.get(ws);
     if (connection) {
@@ -81,27 +63,14 @@ export class ConnectionStateManager {
     }
   }
 
-  /**
-   * Get client connection data
-   * @param {WebSocket} ws WebSocket connection
-   * @returns {ClientData|null}
-   */
   getConnectionInfo(ws) {
     return this.connections.get(ws) || null;
   }
 
-  /**
-   * Get all active connections
-   * @returns {Array<[WebSocket, ClientData]>}
-   */
   getAllConnections() {
     return Array.from(this.connections.entries());
   }
 
-  /**
-   * Clean up inactive connections
-   * @param {number} inactivityThreshold Time in ms before connection is considered inactive
-   */
   cleanupInactiveConnections(inactivityThreshold) {
     const now = Date.now();
     for (const [ws, client] of this.connections.entries()) {

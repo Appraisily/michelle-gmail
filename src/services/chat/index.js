@@ -1,7 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { logger } from '../../utils/logger.js';
 import { handleMessage, handleConnect, handleDisconnect } from './handlers.js';
-import { setupHeartbeat, handlePong } from './heartbeat.js';
+import { setupHeartbeat, handlePong, HEARTBEAT_INTERVAL } from './heartbeat.js';
 import { connectionManager } from './connection/manager.js';
 import { ConnectionState } from './connection/types.js';
 
