@@ -2,7 +2,6 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { classificationPrompts } from './classificationPrompts.js';
 import { getOpenAIClient } from './client.js';
-import { emailClassificationFunction } from './functions/classification.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o-mini';
@@ -31,32 +30,35 @@ export async function classifyEmail(
       ? `Previous messages in thread:\n\n${threadContext}\n\nLatest message:\n${emailContent}`
       : emailContent;
 
-    // Initial classification with strict function calling
+    // Initial classification without function calling
     const classificationResponse = await openai.chat.completions.create({
       model: MODEL,
       messages: [
         {
           role: "system",
-          content: classificationPrompts.base(companyKnowledge)
+          content: `${classificationPrompts.base(companyKnowledge)}
+          
+          Respond with a JSON object containing:
+          {
+            "intent": "APPRAISAL_LEAD" | "STATUS_INQUIRY" | "TECHNICAL_SUPPORT" | "GENERAL_INQUIRY" | "PAYMENT_ISSUE" | "FEEDBACK",
+            "urgency": "high" | "medium" | "low",
+            "requiresReply": boolean,
+            "reason": string,
+            "suggestedResponseType": "detailed" | "brief" | "confirmation"
+          }`
         },
         {
           role: "user",
           content: `Analyze this email thoroughly:\n\n${fullContext}`
         }
       ],
-      functions: [emailClassificationFunction],
-      function_call: { name: "classifyEmail" },
       temperature: 0.3,
       max_tokens: 500
     });
 
-    // Parse function call response
-    const functionCall = classificationResponse.choices[0].message.function_call;
-    if (!functionCall || !functionCall.arguments) {
-      throw new Error('Invalid classification response format');
-    }
-
-    const classification = JSON.parse(functionCall.arguments);
+    // Parse response
+    const responseText = classificationResponse.choices[0].message.content;
+    const classification = JSON.parse(responseText);
 
     // Force APPRAISAL_LEAD for messages with images
     if (imageAttachments && imageAttachments.length > 0) {

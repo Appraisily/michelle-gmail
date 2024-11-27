@@ -11,7 +11,7 @@ async function getApiKey() {
       if (!secrets.DATA_HUB_API_KEY) {
         throw new Error('DATA_HUB_API_KEY not found in secrets');
       }
-      return secrets.DATA_HUB_API_KEY;
+      return secrets.DATA_HUB_API_KEY.trim(); // Ensure no whitespace
     });
   }
   return apiKeyPromise;
@@ -59,12 +59,13 @@ export async function queryDataHub(endpoint, method, params = null) {
       });
     }
 
-    // Prepare request options
+    // Prepare request options with explicit headers
     const options = {
       method,
       headers: {
         'X-API-Key': apiKey,
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
       }
     };
 
@@ -73,6 +74,7 @@ export async function queryDataHub(endpoint, method, params = null) {
       method,
       hasParams: !!params,
       hasApiKey: !!apiKey,
+      headers: Object.keys(options.headers),
       timestamp: new Date().toISOString()
     });
 
