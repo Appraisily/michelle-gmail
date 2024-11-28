@@ -1,5 +1,5 @@
 import { classifyEmail } from './classifier.js';
-import { generateResponse } from './responder.js';
+import { generateResponse } from './response/generator.js';
 import { logger } from '../../utils/logger.js';
 import { getSecrets } from '../../utils/secretManager.js';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
