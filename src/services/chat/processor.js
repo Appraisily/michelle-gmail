@@ -3,7 +3,6 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getOpenAIClient } from '../openai/client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
-import { ImageProcessingStatus } from './connection/types.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -86,6 +85,28 @@ export async function processImages(images) {
       timestamp: new Date().toISOString()
     });
     recordMetric('image_analysis_failures', 1);
+    throw error;
+  }
+}
+
+export async function processChat(message, clientId) {
+  try {
+    // Skip processing for non-chat messages
+    if (!message.content) {
+      return null;
+    }
+
+    // Process chat message
+    return await processWithRetry(message, clientId);
+
+  } catch (error) {
+    logger.error('Error in chat processor:', {
+      error: error.message,
+      stack: error.stack,
+      clientId
+    });
+
+    recordMetric('chat_processing_errors', 1);
     throw error;
   }
 }
@@ -174,28 +195,6 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       stack: error.stack,
       clientId,
       retryCount
-    });
-
-    recordMetric('chat_processing_errors', 1);
-    throw error;
-  }
-}
-
-export async function processChat(message, clientId) {
-  try {
-    // Skip processing for non-chat messages
-    if (!message.content) {
-      return null;
-    }
-
-    // Process chat message
-    return await processWithRetry(message, clientId);
-
-  } catch (error) {
-    logger.error('Error in chat processor:', {
-      error: error.message,
-      stack: error.stack,
-      clientId
     });
 
     recordMetric('chat_processing_errors', 1);
