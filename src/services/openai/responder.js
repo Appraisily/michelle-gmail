@@ -35,6 +35,11 @@ async function getAvailableEndpoints() {
 
 async function queryDataHub(endpoint, method, params = null) {
   try {
+    const secrets = await getSecrets();
+    if (!secrets.DATA_HUB_API_KEY) {
+      throw new Error('DATA_HUB_API_KEY not found');
+    }
+
     const url = new URL(`https://data-hub-856401495068.us-central1.run.app${endpoint}`);
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
@@ -44,7 +49,14 @@ async function queryDataHub(endpoint, method, params = null) {
       });
     }
 
-    const response = await fetch(url.toString(), { method });
+    const response = await fetch(url.toString(), {
+      method,
+      headers: {
+        'X-API-Key': secrets.DATA_HUB_API_KEY,
+        'Accept': 'application/json'
+      }
+    });
+
     if (!response.ok) {
       throw new Error(`DataHub request failed: ${response.status}`);
     }
