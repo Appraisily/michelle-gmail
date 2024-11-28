@@ -68,3 +68,4 @@ Remember:
 2. Include specific details from their appraisal/sales records in your response
 3. If the API call fails, gracefully inform that you're having trouble accessing the records
 4. Maintain a professional and helpful tone regardless of data availability`;
+}
