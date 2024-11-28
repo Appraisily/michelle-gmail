@@ -2,6 +2,7 @@ import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { classificationPrompts } from './classificationPrompts.js';
 import { getOpenAIClient } from './client.js';
+import { parseOpenAIResponse } from './utils/responseParser.js';
 
 // CRITICAL: DO NOT CHANGE THIS MODEL CONFIGURATION
 const MODEL = 'gpt-4o-mini';
@@ -38,7 +39,8 @@ export async function classifyEmail(
           role: "system",
           content: `${classificationPrompts.base(companyKnowledge)}
           
-          Respond with a JSON object containing:
+          IMPORTANT: Respond with a plain JSON object only, no markdown formatting.
+          The response should be a raw JSON object containing:
           {
             "intent": "APPRAISAL_LEAD" | "STATUS_INQUIRY" | "TECHNICAL_SUPPORT" | "GENERAL_INQUIRY" | "PAYMENT_ISSUE" | "FEEDBACK",
             "urgency": "high" | "medium" | "low",
@@ -56,9 +58,8 @@ export async function classifyEmail(
       max_tokens: 500
     });
 
-    // Parse response
-    const responseText = classificationResponse.choices[0].message.content;
-    const classification = JSON.parse(responseText);
+    // Parse response using the new utility
+    const classification = parseOpenAIResponse(classificationResponse.choices[0].message.content);
 
     // Force APPRAISAL_LEAD for messages with images
     if (imageAttachments && imageAttachments.length > 0) {
