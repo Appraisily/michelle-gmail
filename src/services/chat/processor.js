@@ -41,6 +41,55 @@ function updateConversationContext(clientId, role, content, messageId) {
   }
 }
 
+export async function processImages(images) {
+  try {
+    const openai = await getOpenAIClient();
+    
+    const imageAnalysisResponse = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "system",
+          content: `You are an expert art and antiques appraiser. Analyze the provided images and provide detailed observations.
+                   Use this company knowledge base: ${JSON.stringify(companyKnowledge)}`
+        },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Analyze these images of potential items for appraisal:" },
+            ...images.map(img => ({
+              type: "image_url",
+              image_url: {
+                url: `data:${img.mimeType};base64,${img.data}`
+              }
+            }))
+          ]
+        }
+      ],
+      temperature: 0.7
+    });
+
+    const analysis = imageAnalysisResponse.choices[0].message.content;
+    
+    logger.info('Image analysis completed', {
+      imageCount: images.length,
+      analysisLength: analysis.length,
+      timestamp: new Date().toISOString()
+    });
+
+    recordMetric('image_analyses', 1);
+    return analysis;
+  } catch (error) {
+    logger.error('Error analyzing images:', {
+      error: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+    recordMetric('image_analysis_failures', 1);
+    throw error;
+  }
+}
+
 async function processWithRetry(message, clientId, retryCount = 0) {
   try {
     const openai = await getOpenAIClient();
@@ -50,14 +99,14 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const messages = [
       {
         role: "system",
-        content: `You are Michelle Thompson, a professional customer service representative for Appraisily, a leading art and antique appraisal firm.
+        content: `You are Michelle Thompson, a professional customer service representative for Appraisily.
                  Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
                  
                  Guidelines:
                  - Be friendly and professional
                  - Ask clarifying questions when needed
                  - Provide accurate information about our services
-                 - Guide customers towards appropriate appraisal services
+                 - Guide customers towards appropriate services
                  - Never provide specific valuations in chat
                  - Maintain conversation context
                  - Keep responses concise but helpful`
@@ -88,34 +137,21 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const reply = completion.choices[0].message.content;
     const responseId = uuidv4();
 
-    // Log the full OpenAI response
-    logger.info('OpenAI generated response', {
-      clientId,
-      messageId: responseId,
-      replyTo: message.id,
-      response: reply,
-      contextLength: context.length,
-      hasImages: !!message.images?.length,
-      timestamp: new Date().toISOString()
-    });
-
     // Update conversation context
-    updateConversationContext(clientId, "user", message.content, message.id);
+    updateConversationContext(clientId, "user", message.content, message.messageId);
     updateConversationContext(clientId, "assistant", reply, responseId);
 
     logger.info('Chat response generated', {
       clientId,
       messageId: responseId,
-      replyTo: message.id,
+      replyTo: message.messageId,
       contextLength: context.length,
-      hasImages: !!message.images?.length,
       timestamp: new Date().toISOString()
     });
 
     recordMetric('chat_responses_generated', 1);
 
     return {
-      type: 'response',
       messageId: responseId,
       content: reply,
       timestamp: new Date().toISOString()
