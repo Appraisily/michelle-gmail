@@ -8,7 +8,8 @@ export const ConnectionState = {
 export const ConnectionStatus = {
   PENDING: 'pending',
   CONFIRMED: 'confirmed',
-  FAILED: 'failed'
+  FAILED: 'failed',
+  DISCONNECTED: 'disconnected'
 };
 
 export const MessageType = {
@@ -20,14 +21,15 @@ export const MessageType = {
   PING: 'ping',
   PONG: 'pong',
   CONFIRM: 'confirm',
-  IMAGE_STATUS: 'image_status'
+  IMAGE_STATUS: 'image_status',
+  DISCONNECT: 'disconnect'
 };
 
-export const MessageDeliveryStatus = {
+export const MessageStatus = {
   SENT: 'sent',
-  DELIVERED: 'delivered',
-  FAILED: 'failed',
-  RETRYING: 'retrying'
+  RECEIVED: 'received',
+  PROCESSED: 'processed',
+  FAILED: 'failed'
 };
 
 export const ImageProcessingStatus = {
@@ -35,4 +37,14 @@ export const ImageProcessingStatus = {
   PROCESSING: 'processing',
   ANALYZED: 'analyzed',
   FAILED: 'failed'
+};
+
+export const ImageValidation = {
+  MAX_SIZE: 10 * 1024 * 1024, // 10MB
+  SUPPORTED_TYPES: [
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp'
+  ]
 };

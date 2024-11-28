@@ -1,8 +1,8 @@
 import { logger } from '../../../utils/logger.js';
 
-const INITIAL_DELAY = 1000; // 1 second
-const MAX_DELAY = 30000; // 30 seconds
-const MAX_RETRIES = 5;
+const INITIAL_DELAY = 5000; // 5 seconds
+const MAX_DELAY = 20000; // 20 seconds
+const MAX_RETRIES = 3;
 const JITTER_FACTOR = 0.2; // 20% random jitter
 
 export class ReconnectionManager {
@@ -17,7 +17,7 @@ export class ReconnectionManager {
    * @returns {number} Delay in milliseconds
    */
   calculateDelay(attempt) {
-    // Calculate base delay: 1s, 2s, 4s, 8s, 16s...
+    // Calculate base delay: 5s, 10s, 20s
     const baseDelay = Math.min(
       INITIAL_DELAY * Math.pow(2, attempt),
       MAX_DELAY
