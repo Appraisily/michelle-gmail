@@ -1,13 +1,16 @@
 import { MessageType } from '../connection/types.js';
 
 const REQUIRED_FIELDS = {
-  [MessageType.MESSAGE]: ['type', 'content', 'messageId', 'clientId', 'timestamp'],
+  // System messages don't require messageId
   [MessageType.CONNECT]: ['type', 'clientId', 'timestamp'],
   [MessageType.CONNECT_CONFIRM]: ['type', 'clientId', 'conversationId', 'timestamp'],
-  [MessageType.CONFIRM]: ['type', 'messageId', 'clientId', 'timestamp'],
   [MessageType.PING]: ['type', 'clientId', 'timestamp'],
   [MessageType.PONG]: ['type', 'clientId', 'timestamp'],
-  [MessageType.DISCONNECT]: ['type', 'clientId', 'timestamp']
+  [MessageType.DISCONNECT]: ['type', 'clientId', 'timestamp'],
+  // Regular messages require messageId
+  [MessageType.MESSAGE]: ['type', 'content', 'messageId', 'clientId', 'timestamp'],
+  [MessageType.CONFIRM]: ['type', 'messageId', 'clientId', 'timestamp'],
+  [MessageType.ERROR]: ['type', 'clientId', 'timestamp']
 };
 
 export function validateMessage(message) {
@@ -30,17 +33,22 @@ export function validateMessage(message) {
     };
   }
 
-  // Check required fields for message type
-  const requiredFields = REQUIRED_FIELDS[message.type] || ['type', 'clientId', 'timestamp'];
+  // Get required fields based on message type
+  const requiredFields = REQUIRED_FIELDS[message.type];
+  
+  // If message type not found in REQUIRED_FIELDS, only require basic fields
+  if (!requiredFields) {
+    return {
+      isValid: !!(message.type && message.clientId && message.timestamp),
+      errors: []
+    };
+  }
+
+  // Validate required fields
   for (const field of requiredFields) {
     if (!message[field]) {
       errors.push(`Missing required field: ${field}`);
     }
-  }
-
-  // Skip messageId validation for connection-related messages
-  if (message.type === MessageType.MESSAGE && !message.messageId) {
-    errors.push('Missing required field: messageId');
   }
 
   // Validate timestamp format

@@ -56,6 +56,7 @@ export async function handleInitialConnection(ws, message, clientIp) {
       id: message.clientId,
       ip: clientIp,
       isAlive: true,
+      lastPong: Date.now(),
       connectedAt: Date.now(),
       lastMessage: Date.now(),
       messageCount: 0,
@@ -79,6 +80,7 @@ export async function handleInitialConnection(ws, message, clientIp) {
     await connectionManager.sendMessage(ws, {
       type: MessageType.CONNECT_CONFIRM,
       clientId: clientData.id,
+      status: ConnectionStatus.CONFIRMED,
       conversationId: clientData.conversationId,
       timestamp: new Date().toISOString()
     });

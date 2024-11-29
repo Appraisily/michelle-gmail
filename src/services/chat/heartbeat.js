@@ -25,9 +25,22 @@ export function setupHeartbeat(wss, connectionManager) {
       }
 
       // Give new connections an initial grace period
-      const connectionAge = Date.now() - client.connectedAt;
-      if (connectionAge < INITIAL_GRACE_PERIOD) {
+      if (Date.now() - client.connectedAt < INITIAL_GRACE_PERIOD) {
+        client.isAlive = true; // Keep client alive during grace period
         return;
+      }
+
+      // Check last pong time
+      const lastPongAge = Date.now() - (client.lastPong || 0);
+      if (lastPongAge > HEARTBEAT_TIMEOUT) {
+        logger.info('Client exceeded heartbeat timeout', {
+          clientId: client.id,
+          lastPongAge,
+          timeout: HEARTBEAT_TIMEOUT,
+          timestamp: new Date().toISOString()
+        });
+        connectionManager.removeConnection(ws);
+        return ws.terminate();
       }
 
       // Check if client missed last heartbeat
