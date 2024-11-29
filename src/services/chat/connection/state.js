@@ -9,10 +9,13 @@ export class ConnectionStateManager {
   addConnection(ws, clientData) {
     // Only add if connection is in CONNECTING or OPEN state
     if (ws.readyState <= ConnectionState.OPEN) {
+      const now = Date.now();
       this.connections.set(ws, {
         ...clientData,
         pendingConfirmations: new Set(),
-        lastActivity: Date.now()
+        lastActivity: now,
+        connectedAt: now,
+        lastPong: now
       });
       
       logger.debug('Client connection added', {
@@ -75,10 +78,20 @@ export class ConnectionStateManager {
   cleanupInactiveConnections(inactivityThreshold) {
     const now = Date.now();
     for (const [ws, client] of this.connections.entries()) {
-      if (now - client.lastActivity > inactivityThreshold) {
+      // Skip cleanup during initial grace period
+      const connectionAge = now - client.connectedAt;
+      if (connectionAge < 45000) { // 45 second grace period
+        continue;
+      }
+
+      // Check for inactivity after grace period
+      const inactiveTime = now - client.lastActivity;
+      if (inactiveTime > inactivityThreshold) {
         logger.info('Removing inactive connection', {
           clientId: client.id,
-          inactiveTime: now - client.lastActivity
+          inactiveTime,
+          connectionAge,
+          timestamp: new Date().toISOString()
         });
         this.removeConnection(ws);
         ws.terminate();

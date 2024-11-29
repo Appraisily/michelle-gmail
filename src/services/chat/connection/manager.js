@@ -8,10 +8,16 @@ import { v4 as uuidv4 } from 'uuid';
 export class ConnectionManager {
   constructor() {
     this.state = connectionState;
+    this.pendingConfirmations = new Map();
   }
 
   addConnection(ws, clientData) {
     if (ws.readyState <= ConnectionState.OPEN) {
+      // Initialize connection state
+      clientData.connectedAt = Date.now();
+      clientData.lastPong = Date.now();
+      clientData.isAlive = true;
+
       this.state.addConnection(ws, clientData);
       logger.info('New connection added', {
         clientId: clientData.id,
@@ -36,7 +42,7 @@ export class ConnectionManager {
   async sendMessage(ws, message) {
     try {
       if (!ws || ws.readyState !== ConnectionState.OPEN) {
-        logger.warn('Cannot send message - connection not in OPEN state', {
+        logger.debug('Cannot send message - connection not in OPEN state', {
           clientId: message.clientId,
           readyState: ws?.readyState,
           timestamp: new Date().toISOString()
@@ -51,12 +57,19 @@ export class ConnectionManager {
       // Track message status
       if (message.type === MessageType.MESSAGE || 
           message.type === MessageType.RESPONSE) {
+        // Only track non-system messages
         messageTracker.trackMessage(messageId, message.clientId);
         
         // Save message to persistent store
         await messageStore.saveMessage(message.clientId, {
           ...message,
           status: MessageStatus.SENT
+        });
+      } else if (message.type === MessageType.CONNECT_CONFIRM) {
+        // Track connection confirmation
+        this.pendingConfirmations.set(message.clientId, {
+          timestamp: Date.now(),
+          messageId
         });
       }
 
@@ -121,6 +134,10 @@ export class ConnectionManager {
   updateActivity(ws) {
     if (ws && ws.readyState === ConnectionState.OPEN) {
       this.state.updateActivity(ws);
+      const client = this.getConnectionInfo(ws);
+      if (client) {
+        client.lastActivity = Date.now();
+      }
     }
   }
 
