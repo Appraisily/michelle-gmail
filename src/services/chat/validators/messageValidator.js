@@ -1,7 +1,9 @@
 import { MessageType } from '../connection/types.js';
 
 const REQUIRED_FIELDS = {
-  [MessageType.MESSAGE]: ['type', 'content', 'messageId', 'clientId', 'timestamp'],
+  [MessageType.MESSAGE]: ['type', 'content', 'messageId', 'clientId', 'timestamp'], 
+  [MessageType.CONNECT]: ['type', 'clientId', 'timestamp'],
+  [MessageType.CONNECT_CONFIRM]: ['type', 'clientId', 'conversationId', 'timestamp'],
   [MessageType.CONFIRM]: ['type', 'messageId', 'clientId', 'timestamp'],
   [MessageType.PING]: ['type', 'clientId', 'timestamp'],
   [MessageType.DISCONNECT]: ['type', 'clientId', 'timestamp', 'messageId']

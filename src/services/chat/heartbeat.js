@@ -1,8 +1,9 @@
 import { logger } from '../../utils/logger.js';
 import { ConnectionState } from './connection/types.js';
 
-export const HEARTBEAT_INTERVAL = 10000; // 10 seconds
-export const HEARTBEAT_TIMEOUT = 15000; // 15 seconds (interval + 5s grace period)
+export const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+export const HEARTBEAT_TIMEOUT = 90000; // 90 seconds (3x interval for grace period)
+export const INITIAL_GRACE_PERIOD = 45000; // 45 second initial grace period
 
 /**
  * Sets up heartbeat monitoring for WebSocket connections
@@ -21,6 +22,12 @@ export function setupHeartbeat(wss, connectionManager) {
           timestamp: new Date().toISOString()
         });
         return ws.terminate();
+      }
+
+      // Give new connections an initial grace period
+      const connectionAge = Date.now() - client.connectedAt;
+      if (connectionAge < INITIAL_GRACE_PERIOD) {
+        return;
       }
 
       // Check if client missed last heartbeat
@@ -62,6 +69,7 @@ export function setupHeartbeat(wss, connectionManager) {
   logger.info('Heartbeat service initialized', {
     interval: HEARTBEAT_INTERVAL,
     timeout: HEARTBEAT_TIMEOUT,
+    initialGracePeriod: INITIAL_GRACE_PERIOD,
     timestamp: new Date().toISOString()
   });
 

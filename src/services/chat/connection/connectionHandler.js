@@ -56,6 +56,7 @@ export async function handleInitialConnection(ws, message, clientIp) {
       id: message.clientId,
       ip: clientIp,
       isAlive: true,
+      connectedAt: Date.now(),
       lastMessage: Date.now(),
       messageCount: 0,
       conversationId: uuidv4(),
