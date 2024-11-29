@@ -3,6 +3,7 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getOpenAIClient } from '../openai/client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
+import { dataHubClient } from '../dataHub/client.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -116,12 +117,21 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const openai = await getOpenAIClient();
     const context = getConversationContext(clientId);
 
+    // Get available DataHub endpoints
+    const endpoints = await dataHubClient.fetchEndpoints();
+
     // Format conversation history for OpenAI
     const messages = [
       {
         role: "system",
         content: `You are Michelle Thompson, a professional customer service representative for Appraisily.
                  Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
+                 
+                 You have access to our DataHub API through the queryDataHub function.
+                 Available endpoints:
+                 - GET /api/appraisals/pending - Check pending appraisals
+                 - GET /api/appraisals/completed - Check completed appraisals
+                 - GET /api/sales - Check sales history
                  
                  Guidelines:
                  - Be friendly and professional
@@ -130,7 +140,8 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Guide customers towards appropriate services
                  - Never provide specific valuations in chat
                  - Maintain conversation context
-                 - Keep responses concise but helpful`
+                 - Keep responses concise but helpful
+                 - Check customer records when asked about appraisals or orders`
       },
       ...context.map(msg => ({
         role: msg.role === "assistant" ? "assistant" : "user",
@@ -151,12 +162,115 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages,
+      functions: [{
+        name: "queryDataHub",
+        description: "Query DataHub API endpoints to get customer information",
+        parameters: {
+          type: "object",
+          properties: {
+            endpoint: {
+              type: "string",
+              description: "The endpoint path to query (e.g., /api/appraisals/pending)"
+            },
+            method: {
+              type: "string",
+              enum: ["GET"],
+              description: "HTTP method to use"
+            },
+            params: {
+              type: "object",
+              description: "Query parameters",
+              properties: {
+                email: {
+                  type: "string",
+                  description: "Customer email address"
+                },
+                sessionId: {
+                  type: "string",
+                  description: "Session ID for specific queries"
+                },
+                wordpressSlug: {
+                  type: "string",
+                  description: "WordPress URL slug"
+                }
+              }
+            }
+          },
+          required: ["endpoint", "method"]
+        }
+      }],
+      function_call: "auto",
       temperature: 0.7,
       max_tokens: 500
     });
 
-    const reply = completion.choices[0].message.content;
+    let reply = '';
     const responseId = uuidv4();
+
+    // Handle potential function calls
+    if (completion.choices[0].message.function_call) {
+      const functionCall = completion.choices[0].message.function_call;
+      const args = JSON.parse(functionCall.arguments);
+
+      logger.info('DataHub query requested', {
+        endpoint: args.endpoint,
+        method: args.method,
+        params: args.params,
+        timestamp: new Date().toISOString()
+      });
+
+      try {
+        const customerInfo = await dataHubClient.makeRequest(
+          args.endpoint,
+          args.method,
+          args.params
+        );
+
+        // Get completion with function result
+        const functionResponse = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            ...messages,
+            {
+              role: "assistant",
+              content: "Let me check your records."
+            },
+            {
+              role: "function",
+              name: "queryDataHub",
+              content: JSON.stringify(customerInfo)
+            }
+          ],
+          temperature: 0.7
+        });
+
+        reply = functionResponse.choices[0].message.content;
+      } catch (error) {
+        logger.error('Error querying DataHub:', {
+          error: error.message,
+          endpoint: args.endpoint,
+          stack: error.stack,
+          timestamp: new Date().toISOString()
+        });
+
+        // Generate response acknowledging the error
+        const errorResponse = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            ...messages,
+            {
+              role: "assistant",
+              content: "I encountered an error while trying to access your records."
+            }
+          ],
+          temperature: 0.7
+        });
+
+        reply = errorResponse.choices[0].message.content;
+      }
+    } else {
+      reply = completion.choices[0].message.content;
+    }
 
     // Update conversation context
     updateConversationContext(clientId, "user", message.content, message.messageId);
