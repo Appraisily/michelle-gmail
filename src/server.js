@@ -1,11 +1,14 @@
 import express from 'express';
 import http from 'http';
+import multer from 'multer';
+import rateLimit from 'express-rate-limit';
 import { logger } from './utils/logger.js';
 import { setupGmailWatch, renewWatch } from './services/gmail/watch.js';
 import { handleWebhook } from './services/gmail/webhook.js';
 import { sendEmail } from './services/gmail/message.js';
 import { getSecrets } from './utils/secretManager.js';
 import { initializeChatService } from './services/chat/index.js';
+import { processDirectMessage } from './services/direct/index.js';
 
 const app = express();
 app.use(express.json());
@@ -18,7 +21,22 @@ const server = http.createServer(app);
 // Initialize WebSocket for chat
 initializeChatService(server);
 
-// Middleware to verify API key
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 5 // Maximum 5 files
+  }
+});
+
+// Rate limiting middleware
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+
+// Middleware to verify API key for DataHub endpoints
 async function verifyApiKey(req, res, next) {
   try {
     const apiKey = req.headers['x-api-key'];
@@ -34,6 +52,27 @@ async function verifyApiKey(req, res, next) {
     next();
   } catch (error) {
     logger.error('API key verification failed:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+// Middleware to verify direct message API key
+async function verifyDirectApiKey(req, res, next) {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) {
+      return res.status(401).json({ error: 'API key required' });
+    }
+
+    const secrets = await getSecrets();
+    // Use DIRECT_API_KEY for the direct message endpoint
+    if (apiKey !== secrets.DIRECT_API_KEY) {
+      return res.status(403).json({ error: 'Invalid API key' });
+    }
+
+    next();
+  } catch (error) {
+    logger.error('Direct API key verification failed:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
@@ -126,6 +165,29 @@ app.post('/api/email/send', verifyApiKey, async (req, res) => {
     });
   }
 });
+
+// Direct message processing endpoint
+app.post('/api/process-message', 
+  verifyDirectApiKey, // Use specific middleware for direct message endpoint
+  limiter,
+  upload.array('images', 5),
+  async (req, res) => {
+    try {
+      const result = await processDirectMessage(req);
+      res.status(result.success ? 200 : 400).json(result);
+    } catch (error) {
+      logger.error('Direct message processing failed:', error);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Internal server error',
+          details: [error.message]
+        }
+      });
+    }
+  }
+);
 
 app.get('/health', (req, res) => {
   res.status(200).json({ 

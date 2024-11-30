@@ -81,6 +81,65 @@ This service automatically processes incoming emails using Gmail API watch notif
 }
 ```
 
+### 3. Direct Message Processing API
+
+#### Endpoint
+```http
+POST /api/process-message
+Content-Type: multipart/form-data
+```
+
+#### Request Format
+```javascript
+{
+  text: string,          // Message text content
+  images?: File[],       // Optional array of image files
+  senderEmail?: string,  // Optional sender email for context
+  senderName?: string,   // Optional sender name
+  context?: {           // Optional additional context
+    threadId?: string,
+    conversationId?: string
+  }
+}
+```
+
+#### Success Response
+```javascript
+{
+  "success": true,
+  "response": {
+    "text": "Generated response text",
+    "imageAnalysis": "Image analysis details (if images provided)",
+    "metadata": {
+      "processingTime": "123ms",
+      "imagesProcessed": 2,
+      "model": "gpt-4o"
+    }
+  }
+}
+```
+
+#### Error Response
+```javascript
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid image format",
+    "details": ["Only JPG, PNG formats are supported"]
+  }
+}
+```
+
+#### Features
+- Direct text and image processing
+- Secure file upload handling
+- Comprehensive input validation
+- Rate limiting and access control
+- Integration with existing OpenAI processing
+- Detailed response metadata
+- Error handling with specific codes
+
 #### Image Processing Protocol
 ```javascript
 // 1. Client sends message with image
@@ -134,21 +193,7 @@ This service automatically processes incoming emails using Gmail API watch notif
 }
 ```
 
-#### Features
-- WebSocket-based real-time chat
-- Message rate limiting (1 second cooldown)
-- Automatic reconnection handling
-- Client state tracking
-- Welcome messages for new connections
-- Heartbeat mechanism (60-second interval)
-- Conversation context preservation
-- Error handling with retries
-- Secure client identification
-- Image processing queue management
-- Message delivery confirmation
-- Connection state management
-
-### 3. OpenAI Integration
+### 4. OpenAI Integration
 - GPT-4o for email/chat classification
 - GPT-4V for image analysis
 - Context-aware response generation
@@ -205,6 +250,33 @@ OpenAI Integration
   └── Response Generation
   ↓
 Response Router
+```
+
+### Direct Message Processing Flow
+```
+API Request
+  ↓
+Input Validator
+  ├── Message Format Check
+  ├── Image Validation
+  └── Context Verification
+  ↓
+Image Processor
+  ├── Format Validation
+  ├── Size Check
+  └── Base64 Conversion
+  ↓
+OpenAI Service
+  ├── Context Building
+  ├── Image Analysis
+  └── Text Generation
+  ↓
+Response Generator
+  ├── Format Response
+  ├── Add Metadata
+  └── Error Handling
+  ↓
+API Response
 ```
 
 ## Key Components
@@ -270,6 +342,9 @@ Manually renews Gmail watch subscription.
 ### POST /api/email/send
 Sends emails through Gmail API.
 
+### POST /api/process-message
+Direct message processing endpoint.
+
 ### GET /health
 Health check endpoint.
 
@@ -313,6 +388,15 @@ NODE_ENV=production
 - Content truncation for large emails
 - Duplicate message detection
 - Parallel message processing
+
+### Direct Message Processing
+- Input validation caching
+- Image processing queue
+- Parallel image analysis
+- Response caching
+- Rate limiting per client
+- Request deduplication
+- Performance monitoring
 
 ### Memory Management
 - LRU cache for processed messages

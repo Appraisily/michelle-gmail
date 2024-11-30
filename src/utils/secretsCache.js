@@ -44,7 +44,8 @@ class SecretsCache {
       'GMAIL_REFRESH_TOKEN',
       'OPENAI_API_KEY',
       'MICHELLE_CHAT_LOG_SPREADSHEETID',
-      'DATA_HUB_API_KEY'
+      'DATA_HUB_API_KEY',
+      'DIRECT_API_KEY'  // Add the new secret for direct message endpoint
     ];
 
     for (const name of requiredSecrets) {
