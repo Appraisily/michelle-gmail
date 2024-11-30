@@ -13,6 +13,9 @@ import { processDirectMessage } from './services/direct/index.js';
 const app = express();
 app.use(express.json());
 
+// Enable trust proxy since we're behind Cloud Run
+app.set('trust proxy', true);
+
 const PORT = process.env.PORT || 8080;
 
 // Create HTTP server

@@ -40,8 +40,10 @@ export async function processDirectMessage(req) {
           originalname: f.originalname,
           encoding: f.encoding,
           mimetype: f.mimetype,
-          size: f.size
-        }))
+          size: f.size,
+          bufferLength: f.buffer?.length
+        })),
+        timestamp: new Date().toISOString()
       });
 
       processedImages = await processImages(req.files);
@@ -52,8 +54,10 @@ export async function processDirectMessage(req) {
           id: img.id,
           mimeType: img.mimeType,
           size: img.data.length,
-          filename: img.filename
-        }))
+          filename: img.filename,
+          dataPreview: img.data.slice(0, 50).toString('hex')
+        })),
+        timestamp: new Date().toISOString()
       });
     }
 
@@ -84,8 +88,11 @@ export async function processDirectMessage(req) {
         images: processedImages.map(img => ({
           id: img.id,
           mimeType: img.mimeType,
-          dataSize: img.data.length
-        }))
+          dataSize: img.data.length,
+          bufferType: img.data.constructor.name,
+          isBuffer: Buffer.isBuffer(img.data)
+        })),
+        timestamp: new Date().toISOString()
       });
 
       const content = [
@@ -97,17 +104,38 @@ export async function processDirectMessage(req) {
             mimeType: img.mimeType,
             originalSize: img.data.length,
             base64Length: base64Data.length,
-            base64Preview: base64Data.substring(0, 100) + '...'
+            base64Preview: base64Data.substring(0, 100) + '...',
+            isValidBase64: /^[A-Za-z0-9+/=]+$/.test(base64Data),
+            timestamp: new Date().toISOString()
+          });
+
+          const imageUrl = `data:${img.mimeType};base64,${base64Data}`;
+          logger.debug('Image URL format', {
+            imageId: img.id,
+            urlLength: imageUrl.length,
+            urlPrefix: imageUrl.substring(0, 50) + '...',
+            timestamp: new Date().toISOString()
           });
 
           return {
             type: "image_url",
             image_url: {
-              url: `data:${img.mimeType};base64,${base64Data}`
+              url: imageUrl
             }
           };
         })
       ];
+
+      logger.debug('Final content array structure', {
+        contentLength: content.length,
+        textContent: content[0],
+        imageUrls: content.slice(1).map(item => ({
+          type: item.type,
+          urlLength: item.image_url.url.length,
+          urlPrefix: item.image_url.url.substring(0, 50) + '...'
+        })),
+        timestamp: new Date().toISOString()
+      });
 
       messages.push({
         role: "user",
@@ -120,11 +148,19 @@ export async function processDirectMessage(req) {
       });
     }
 
-    logger.debug('Sending request to OpenAI', {
+    logger.debug('OpenAI API request payload', {
       model: processedImages.length > 0 ? "gpt-4o" : "gpt-4o-mini",
       messageCount: messages.length,
       hasImages: processedImages.length > 0,
-      textLength: req.body.text.length
+      textLength: req.body.text.length,
+      messagesStructure: messages.map(msg => ({
+        role: msg.role,
+        contentType: typeof msg.content === 'string' ? 'string' : 'array',
+        contentLength: typeof msg.content === 'string' ? 
+          msg.content.length : 
+          msg.content.length
+      })),
+      timestamp: new Date().toISOString()
     });
 
     // Generate response
@@ -133,6 +169,14 @@ export async function processDirectMessage(req) {
       messages,
       temperature: 0.7,
       max_tokens: 500
+    });
+
+    logger.debug('OpenAI API response', {
+      choicesLength: completion.choices.length,
+      firstChoiceLength: completion.choices[0].message.content.length,
+      modelUsed: completion.model,
+      usage: completion.usage,
+      timestamp: new Date().toISOString()
     });
 
     const response = completion.choices[0].message.content;
@@ -147,7 +191,8 @@ export async function processDirectMessage(req) {
       processingTime: getProcessingTime(processingStart),
       imagesProcessed: processedImages.length,
       responseLength: response.length,
-      model: processedImages.length > 0 ? "gpt-4o" : "gpt-4o-mini"
+      model: processedImages.length > 0 ? "gpt-4o" : "gpt-4o-mini",
+      timestamp: new Date().toISOString()
     });
 
     return {
@@ -166,7 +211,8 @@ export async function processDirectMessage(req) {
     logger.error('Error processing direct message:', {
       error: error.message,
       stack: error.stack,
-      processingTime: getProcessingTime(processingStart)
+      processingTime: getProcessingTime(processingStart),
+      timestamp: new Date().toISOString()
     });
 
     recordMetric('direct_message_errors', 1);
