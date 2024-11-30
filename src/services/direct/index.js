@@ -33,7 +33,7 @@ export async function processDirectMessage(req) {
     // Process images if present
     let processedImages = [];
     if (req.files?.length > 0) {
-      logger.debug('Starting image processing pipeline', {
+      logger.info('Starting image processing pipeline', {
         fileCount: req.files.length,
         files: req.files.map(f => ({
           fieldname: f.fieldname,
@@ -48,7 +48,7 @@ export async function processDirectMessage(req) {
 
       processedImages = await processImages(req.files);
 
-      logger.debug('Image processing completed', {
+      logger.info('Image processing completed', {
         processedCount: processedImages.length,
         images: processedImages.map(img => ({
           id: img.id,
@@ -68,21 +68,30 @@ export async function processDirectMessage(req) {
     const messages = [
       {
         role: "system",
-        content: `You are Michelle Thompson, a professional customer service representative for Appraisily.
-                 Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
-                 
-                 Guidelines:
-                 - Be friendly and professional
-                 - Provide accurate information
-                 - Never provide specific valuations without formal appraisal
-                 - Keep responses focused and relevant
-                 - Include next steps when appropriate`
+        content: `You are Michelle Thompson, an expert art appraiser at Appraisily.
+                 Your task is to provide clear, concise, and professional descriptions of art and antique items.
+
+                 When analyzing images:
+                 - Focus on key visual characteristics
+                 - Describe materials, style, and condition
+                 - Highlight notable features or unique aspects
+                 - Keep descriptions clear and professional
+                 - Avoid speculating about value
+                 - Respond directly to the user's specific request
+
+                 Use this company knowledge base for context: ${JSON.stringify(companyKnowledge)}
+
+                 IMPORTANT: 
+                 - Provide direct, focused responses
+                 - Stay on topic
+                 - Be concise but informative
+                 - Address the specific request in the message`
       }
     ];
 
     // Add user message with images if present
     if (processedImages.length > 0) {
-      logger.debug('Preparing OpenAI message with images', {
+      logger.info('Preparing OpenAI message with images', {
         imageCount: processedImages.length,
         textLength: req.body.text.length,
         images: processedImages.map(img => ({
@@ -99,7 +108,7 @@ export async function processDirectMessage(req) {
         { type: "text", text: req.body.text },
         ...processedImages.map(img => {
           const base64Data = img.data.toString('base64');
-          logger.debug('Image base64 conversion', {
+          logger.info('Image base64 conversion', {
             imageId: img.id,
             mimeType: img.mimeType,
             originalSize: img.data.length,
@@ -110,7 +119,7 @@ export async function processDirectMessage(req) {
           });
 
           const imageUrl = `data:${img.mimeType};base64,${base64Data}`;
-          logger.debug('Image URL format', {
+          logger.info('Image URL format', {
             imageId: img.id,
             urlLength: imageUrl.length,
             urlPrefix: imageUrl.substring(0, 50) + '...',
@@ -126,7 +135,7 @@ export async function processDirectMessage(req) {
         })
       ];
 
-      logger.debug('Final content array structure', {
+      logger.info('Final content array structure', {
         contentLength: content.length,
         textContent: content[0],
         imageUrls: content.slice(1).map(item => ({
@@ -148,7 +157,7 @@ export async function processDirectMessage(req) {
       });
     }
 
-    logger.debug('OpenAI API request payload', {
+    logger.info('OpenAI API request payload', {
       model: processedImages.length > 0 ? "gpt-4o" : "gpt-4o-mini",
       messageCount: messages.length,
       hasImages: processedImages.length > 0,
@@ -171,7 +180,7 @@ export async function processDirectMessage(req) {
       max_tokens: 500
     });
 
-    logger.debug('OpenAI API response', {
+    logger.info('OpenAI API response', {
       choicesLength: completion.choices.length,
       firstChoiceLength: completion.choices[0].message.content.length,
       modelUsed: completion.model,
