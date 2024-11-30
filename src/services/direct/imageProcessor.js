@@ -15,15 +15,52 @@ export async function processImages(files) {
   const processedImages = [];
 
   try {
+    logger.debug('Starting image processing', {
+      fileCount: files.length,
+      files: files.map(f => ({
+        originalname: f.originalname,
+        mimetype: f.mimetype,
+        size: f.buffer.length,
+        encoding: f.encoding
+      }))
+    });
+
     for (const file of files) {
       const imageId = uuidv4();
       
+      logger.debug('Processing individual image', {
+        imageId,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.buffer.length
+      });
+
       // Process image with sharp
       const image = sharp(file.buffer);
       const metadata = await image.metadata();
 
+      logger.debug('Image metadata retrieved', {
+        imageId,
+        format: metadata.format,
+        width: metadata.width,
+        height: metadata.height,
+        space: metadata.space,
+        channels: metadata.channels,
+        depth: metadata.depth,
+        density: metadata.density,
+        hasAlpha: metadata.hasAlpha,
+        orientation: metadata.orientation
+      });
+
       // Resize if dimensions exceed limit
       if (metadata.width > MAX_DIMENSION || metadata.height > MAX_DIMENSION) {
+        logger.debug('Resizing image', {
+          imageId,
+          originalWidth: metadata.width,
+          originalHeight: metadata.height,
+          maxDimension: MAX_DIMENSION
+        });
+
         image.resize(MAX_DIMENSION, MAX_DIMENSION, {
           fit: 'inside',
           withoutEnlargement: true
@@ -33,14 +70,24 @@ export async function processImages(files) {
       // Convert to optimized format
       let processedBuffer;
       if (metadata.format === 'gif') {
-        // Keep GIFs as is
+        logger.debug('Keeping GIF format as is', {
+          imageId,
+          originalSize: file.buffer.length
+        });
         processedBuffer = file.buffer;
       } else {
-        // Convert to JPEG for other formats
+        logger.debug('Converting to optimized JPEG', {
+          imageId,
+          originalFormat: metadata.format,
+          quality: JPEG_QUALITY
+        });
+        
         processedBuffer = await image
           .jpeg({ quality: JPEG_QUALITY })
           .toBuffer();
       }
+
+      const processedMetadata = await sharp(processedBuffer).metadata();
 
       processedImages.push({
         id: imageId,
@@ -49,21 +96,38 @@ export async function processImages(files) {
         filename: file.originalname
       });
 
-      logger.debug('Image processed successfully', {
-        id: imageId,
-        originalSize: file.size,
+      logger.debug('Image processing completed', {
+        imageId,
+        originalSize: file.buffer.length,
         processedSize: processedBuffer.length,
+        compressionRatio: (processedBuffer.length / file.buffer.length * 100).toFixed(2) + '%',
         originalFormat: metadata.format,
-        width: metadata.width,
-        height: metadata.height
+        finalFormat: processedMetadata.format,
+        finalWidth: processedMetadata.width,
+        finalHeight: processedMetadata.height
       });
     }
+
+    logger.info('All images processed successfully', {
+      totalImages: files.length,
+      processedImages: processedImages.map(img => ({
+        id: img.id,
+        mimeType: img.mimeType,
+        size: img.data.length,
+        filename: img.filename
+      }))
+    });
 
     return processedImages;
   } catch (error) {
     logger.error('Error processing images:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      files: files.map(f => ({
+        originalname: f.originalname,
+        mimetype: f.mimetype,
+        size: f.buffer.length
+      }))
     });
 
     throw {

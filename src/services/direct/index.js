@@ -31,8 +31,31 @@ export async function processDirectMessage(req) {
     }
 
     // Process images if present
-    const processedImages = req.files?.length > 0 ?
-      await processImages(req.files) : [];
+    let processedImages = [];
+    if (req.files?.length > 0) {
+      logger.debug('Starting image processing pipeline', {
+        fileCount: req.files.length,
+        files: req.files.map(f => ({
+          fieldname: f.fieldname,
+          originalname: f.originalname,
+          encoding: f.encoding,
+          mimetype: f.mimetype,
+          size: f.size
+        }))
+      });
+
+      processedImages = await processImages(req.files);
+
+      logger.debug('Image processing completed', {
+        processedCount: processedImages.length,
+        images: processedImages.map(img => ({
+          id: img.id,
+          mimeType: img.mimeType,
+          size: img.data.length,
+          filename: img.filename
+        }))
+      });
+    }
 
     // Get OpenAI client
     const openai = await getOpenAIClient();
@@ -50,20 +73,59 @@ export async function processDirectMessage(req) {
                  - Never provide specific valuations without formal appraisal
                  - Keep responses focused and relevant
                  - Include next steps when appropriate`
-      },
-      {
-        role: "user",
-        content: processedImages.length > 0 ? [
-          { type: "text", text: req.body.text },
-          ...processedImages.map(img => ({
-            type: "image_url",
-            image_url: {
-              url: `data:${img.mimeType};base64,${img.data.toString('base64')}`
-            }
-          }))
-        ] : req.body.text
       }
     ];
+
+    // Add user message with images if present
+    if (processedImages.length > 0) {
+      logger.debug('Preparing OpenAI message with images', {
+        imageCount: processedImages.length,
+        textLength: req.body.text.length,
+        images: processedImages.map(img => ({
+          id: img.id,
+          mimeType: img.mimeType,
+          dataSize: img.data.length
+        }))
+      });
+
+      const content = [
+        { type: "text", text: req.body.text },
+        ...processedImages.map(img => {
+          const base64Data = img.data.toString('base64');
+          logger.debug('Image base64 conversion', {
+            imageId: img.id,
+            mimeType: img.mimeType,
+            originalSize: img.data.length,
+            base64Length: base64Data.length,
+            base64Preview: base64Data.substring(0, 100) + '...'
+          });
+
+          return {
+            type: "image_url",
+            image_url: {
+              url: `data:${img.mimeType};base64,${base64Data}`
+            }
+          };
+        })
+      ];
+
+      messages.push({
+        role: "user",
+        content
+      });
+    } else {
+      messages.push({
+        role: "user",
+        content: req.body.text
+      });
+    }
+
+    logger.debug('Sending request to OpenAI', {
+      model: processedImages.length > 0 ? "gpt-4o" : "gpt-4o-mini",
+      messageCount: messages.length,
+      hasImages: processedImages.length > 0,
+      textLength: req.body.text.length
+    });
 
     // Generate response
     const completion = await openai.chat.completions.create({
