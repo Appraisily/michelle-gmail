@@ -4,7 +4,7 @@ import { processImages } from './imageProcessor.js';
 import { getOpenAIClient } from '../openai/client.js';
 import { ErrorCodes } from './types.js';
 import { recordMetric } from '../../utils/monitoring.js';
-import { companyKnowledge } from '../../data/companyKnowledge.js';
+import { directMessagePrompts } from './prompts.js';
 
 const startTime = () => process.hrtime();
 const getProcessingTime = (start) => {
@@ -64,28 +64,18 @@ export async function processDirectMessage(req) {
     // Get OpenAI client
     const openai = await getOpenAIClient();
 
+    // Build system prompt
+    const systemPrompt = [
+      directMessagePrompts.base(),
+      processedImages.length > 0 ? directMessagePrompts.imageAnalysis() : '',
+      directMessagePrompts.responseFormat()
+    ].filter(Boolean).join('\n\n');
+
     // Build messages array
     const messages = [
       {
         role: "system",
-        content: `You are Michelle Thompson, an expert art appraiser at Appraisily.
-                 Your task is to provide clear, concise, and professional descriptions of art and antique items.
-
-                 When analyzing images:
-                 - Focus on key visual characteristics
-                 - Describe materials, style, and condition
-                 - Highlight notable features or unique aspects
-                 - Keep descriptions clear and professional
-                 - Avoid speculating about value
-                 - Respond directly to the user's specific request
-
-                 Use this company knowledge base for context: ${JSON.stringify(companyKnowledge)}
-
-                 IMPORTANT: 
-                 - Provide direct, focused responses
-                 - Stay on topic
-                 - Be concise but informative
-                 - Address the specific request in the message`
+        content: systemPrompt
       }
     ];
 

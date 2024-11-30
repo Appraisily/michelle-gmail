@@ -1,85 +1,33 @@
 # Gmail Watch-based Email Processing Service
 
-This service automatically processes incoming emails using Gmail API watch notifications, OpenAI for classification and response generation, and logs activities to Google Sheets. It integrates with Data Hub API for appraisal and sales data.
+A comprehensive backend service that processes emails, chat messages, and direct requests using Gmail API watch notifications, real-time WebSocket communication, and OpenAI for intelligent processing. The service integrates with Data Hub API for appraisal and sales data management.
 
-## Core Features
+## Core Services
 
-### 1. Email Processing
+### 1. Email Processing Service
 - Real-time email monitoring via Gmail Watch API
 - Automatic thread context analysis
 - Image attachment processing with GPT-4V
 - Smart response generation
 - Rate-limited processing with retries
 - Pagination support for history fetching
+- Duplicate message detection
+- Thread context preservation
+- Automatic watch renewal
 
 ### 2. Real-time Chat System
-
-#### Connection Management
-```javascript
-// Initial connection message
-{
-  type: 'connect',
-  clientId: 'user-provided-id',
-  timestamp: '2024-11-26T16:04:30.965Z'
-}
-
-// Connection confirmation
-{
-  type: 'connect_confirm',
-  clientId: 'user-provided-id',
-  conversationId: 'unique-conversation-id',
-  status: 'confirmed',
-  timestamp: '2024-11-26T16:04:31.000Z'
-}
-
-// Server stores client data
-{
-  id: 'user-provided-id',
-  socket: WebSocket,
-  lastSeen: timestamp,
-  conversationId: 'unique-conversation-id',
-  isAlive: true,
-  messageCount: 0,
-  connectionStatus: 'confirmed'
-}
-```
-
-#### Message Delivery Protocol
-```javascript
-// 1. Client sends message
-{
-  type: 'message',
-  clientId: 'user-provided-id',
-  messageId: 'unique-message-id',
-  content: 'message content',
-  timestamp: '2024-11-26T16:04:30.965Z'
-}
-
-// 2. Server confirms receipt
-{
-  type: 'confirm',
-  messageId: 'unique-message-id',
-  status: 'received',
-  timestamp: '2024-11-26T16:04:31.000Z'
-}
-
-// 3. Server sends response
-{
-  type: 'response',
-  messageId: 'response-message-id',
-  replyTo: 'original-message-id',
-  content: 'response content',
-  timestamp: '2024-11-26T16:04:31.100Z'
-}
-
-// 4. Client confirms response receipt
-{
-  type: 'confirm',
-  messageId: 'response-message-id',
-  status: 'delivered',
-  timestamp: '2024-11-26T16:04:31.200Z'
-}
-```
+- WebSocket-based communication
+- Message rate limiting (1 second cooldown)
+- Automatic reconnection handling
+- Client state tracking
+- Welcome messages for new connections
+- Heartbeat mechanism (60-second interval)
+- Conversation context preservation
+- Error handling with retries
+- Secure client identification
+- Image processing queue management
+- Message delivery confirmation
+- Connection state management
 
 ### 3. Direct Message Processing API
 
@@ -87,6 +35,7 @@ This service automatically processes incoming emails using Gmail API watch notif
 ```http
 POST /api/process-message
 Content-Type: multipart/form-data
+X-API-Key: DIRECT_API_KEY
 ```
 
 #### Request Format
@@ -98,7 +47,8 @@ Content-Type: multipart/form-data
   senderName?: string,   // Optional sender name
   context?: {           // Optional additional context
     threadId?: string,
-    conversationId?: string
+    conversationId?: string,
+    wordpressUrl?: string
   }
 }
 ```
@@ -136,62 +86,12 @@ Content-Type: multipart/form-data
 - Secure file upload handling
 - Comprehensive input validation
 - Rate limiting and access control
-- Integration with existing OpenAI processing
+- Integration with OpenAI processing
 - Detailed response metadata
 - Error handling with specific codes
-
-#### Image Processing Protocol
-```javascript
-// 1. Client sends message with image
-{
-  type: 'message',
-  clientId: 'user-provided-id',
-  messageId: 'unique-message-id',
-  content: 'optional message text',
-  images: [{
-    id: 'image-unique-id',
-    data: 'base64-encoded-image',
-    mimeType: 'image/jpeg',
-    filename: 'optional-original-name.jpg'
-  }],
-  timestamp: '2024-11-26T16:04:30.965Z'
-}
-
-// 2. Server confirms image receipt
-{
-  type: 'image_status',
-  messageId: 'unique-message-id',
-  imageId: 'image-unique-id',
-  status: 'received',
-  timestamp: '2024-11-26T16:04:31.000Z'
-}
-
-// 3. Server updates processing status
-{
-  type: 'image_status',
-  messageId: 'unique-message-id',
-  imageId: 'image-unique-id',
-  status: 'processing',
-  timestamp: '2024-11-26T16:04:31.100Z'
-}
-
-// 4. Server sends analysis response
-{
-  type: 'response',
-  messageId: 'response-message-id',
-  replyTo: 'original-message-id',
-  content: 'response with analysis',
-  imageAnalysis: [{
-    imageId: 'image-unique-id',
-    description: 'detailed description',
-    category: 'item category',
-    condition: 'item condition',
-    features: ['notable feature 1', 'notable feature 2'],
-    recommendations: ['professional recommendation 1', 'professional recommendation 2']
-  }],
-  timestamp: '2024-11-26T16:04:32.000Z'
-}
-```
+- Image optimization and validation
+- Request deduplication
+- Performance monitoring
 
 ### 4. OpenAI Integration
 - GPT-4o for email/chat classification
@@ -200,6 +100,9 @@ Content-Type: multipart/form-data
 - Automatic retry logic
 - Token limit management
 - Error handling and fallbacks
+- Model selection based on input type
+- Response formatting
+- Conversation history tracking
 
 ## Architecture Overview
 
@@ -281,42 +184,32 @@ API Response
 
 ## Key Components
 
+### Email Processing Components
+- Gmail Watch Manager: Handles API watch lifecycle
+- History Processor: Manages email history retrieval
+- Message Processor: Handles email content extraction
+- Thread Manager: Maintains conversation context
+- Attachment Handler: Processes email attachments
+- Response Generator: Creates appropriate responses
+
 ### Chat System Components
-- Connection Manager: Handles WebSocket connections and client tracking
-- Message Processor: Validates and processes incoming messages
-- Context Manager: Maintains conversation history and state
+- Connection Manager: Handles WebSocket connections
+- Message Processor: Validates and processes messages
+- Context Manager: Maintains conversation history
 - Response Handler: Formats and sends responses
 - Heartbeat Service: Maintains connection health
 - Rate Limiter: Prevents message flooding
 - Image Queue: Manages image processing state
 - Message Queue: Handles message delivery and retries
 
-### Image Processing
-- Support for JPEG, PNG, GIF, WebP formats
-- Maximum image size: 10MB
-- Parallel processing up to 10 images
-- 30-second timeout per image
-- Automatic retry on failure
-- Progress status updates
-- Detailed analysis results
-
-### Message Delivery
-- Unique message IDs
-- Delivery confirmation protocol
-- 5-second delivery timeout
-- Maximum 3 retry attempts
-- Exponential backoff
-- Status tracking
-- Error recovery
-
-### Monitoring and Logging
-- Detailed error tracking
-- Performance metrics
-- Client activity logging
-- Processing statistics
-- Health checks
-- Image processing metrics
-- Message delivery stats
+### Direct Message Components
+- Request Validator: Validates incoming requests
+- Image Processor: Optimizes and validates images
+- OpenAI Integration: Processes content and generates responses
+- Response Formatter: Structures API responses
+- Error Handler: Manages error states and responses
+- Rate Limiter: Controls request frequency
+- Metrics Collector: Tracks performance and usage
 
 ## API Endpoints
 
@@ -367,6 +260,7 @@ NODE_ENV=production
 - OPENAI_API_KEY
 - MICHELLE_CHAT_LOG_SPREADSHEETID
 - DATA_HUB_API_KEY
+- DIRECT_API_KEY
 - SHARED_SECRET
 
 ## Performance Optimizations
