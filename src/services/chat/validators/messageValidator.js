@@ -8,7 +8,7 @@ const REQUIRED_FIELDS = {
   [MessageType.PONG]: ['type', 'clientId', 'timestamp'],
   [MessageType.DISCONNECT]: ['type', 'clientId', 'timestamp'],
   // Regular messages require messageId
-  [MessageType.MESSAGE]: ['type', 'content', 'messageId', 'clientId', 'timestamp'],
+  [MessageType.MESSAGE]: ['type', 'messageId', 'clientId', 'timestamp'],
   [MessageType.CONFIRM]: ['type', 'messageId', 'clientId', 'timestamp'],
   [MessageType.ERROR]: ['type', 'clientId', 'timestamp']
 };
@@ -60,16 +60,24 @@ export function validateMessage(message) {
     }
   }
 
-  // Validate images if present
-  if (message.images) {
-    if (!Array.isArray(message.images)) {
-      errors.push('Images must be an array');
-    } else {
-      message.images.forEach((img, index) => {
-        if (!img.data || !img.mimeType) {
-          errors.push(`Invalid image data at index ${index}`);
-        }
-      });
+  // Special validation for MESSAGE type
+  if (message.type === MessageType.MESSAGE) {
+    // Allow messages with either content or images or both
+    if (!message.content && (!message.images || !Array.isArray(message.images) || message.images.length === 0)) {
+      errors.push('Message must contain either text content or images');
+    }
+
+    // Validate images if present
+    if (message.images) {
+      if (!Array.isArray(message.images)) {
+        errors.push('Images must be an array');
+      } else {
+        message.images.forEach((img, index) => {
+          if (!img.data || !img.mimeType) {
+            errors.push(`Invalid image data at index ${index}`);
+          }
+        });
+      }
     }
   }
 
