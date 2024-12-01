@@ -67,17 +67,15 @@ export const companyKnowledge = {
         "American Colonial"
       ]
     }
-    // Additional categories available in the full knowledge base
   ],
 
   contact: {
     support: {
-      email: "support@appraisily.com",
-      phone: "+1 (800) 123-4567",
-      hours: "Monday to Friday, 9 AM to 6 PM (EST)"
+      email: "info@appraisily.com",
+      hours: "24/7 via email or live chat at appraisily.com"
     },
     technical: {
-      email: "technicalsupport@appraisily.com"
+      email: "info@appraisily.com"
     }
   },
 
@@ -87,6 +85,11 @@ export const companyKnowledge = {
     "Expert Evaluation: Certified experts conduct professional analysis and market research",
     "Report Delivery: Receive a comprehensive digital report within the specified turnaround time"
   ],
+
+  startAppraisal: {
+    url: "https://appraisily.com/start",
+    description: "To begin your appraisal, visit our dedicated appraisal portal at appraisily.com/start"
+  },
 
   commonResponses: {
     valueInquiry: "You can use our free AI Analysis tool for an initial assessment. For a detailed valuation, our Regular Appraisal service at $59 will provide you with a comprehensive report.",
