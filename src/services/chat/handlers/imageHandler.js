@@ -23,7 +23,13 @@ function validateImage(image) {
 
   // Check size if data is present
   if (image.data) {
-    const size = Buffer.from(image.data, 'base64').length;
+    // If data includes base64 prefix, remove it for size calculation
+    let base64Data = image.data;
+    if (typeof base64Data === 'string' && base64Data.includes('base64,')) {
+      base64Data = base64Data.split('base64,')[1];
+    }
+    
+    const size = Buffer.from(base64Data, 'base64').length;
     if (size > ImageValidation.MAX_SIZE) {
       errors.push(`Image size exceeds maximum allowed (${ImageValidation.MAX_SIZE} bytes)`);
     }
@@ -69,8 +75,17 @@ export async function handleImages(ws, message, client) {
       // Send processing status
       await sendImageStatus(ws, client, message.messageId, image.id, ImageProcessingStatus.PROCESSING);
 
-      // Process image
-      const analysis = await processImages([image]);
+      // Process base64 data
+      let processedData = image.data;
+      if (typeof processedData === 'string' && processedData.includes('base64,')) {
+        processedData = processedData.split('base64,')[1];
+      }
+
+      // Process image with cleaned base64 data
+      const analysis = await processImages([{
+        ...image,
+        data: processedData
+      }]);
 
       // Send analyzed status with results
       await sendImageStatus(ws, client, message.messageId, image.id, ImageProcessingStatus.ANALYZED, null, analysis);

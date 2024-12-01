@@ -45,43 +45,6 @@ export async function processImages(images) {
   try {
     const openai = await getOpenAIClient();
     
-    // Debug log the incoming images
-    logger.debug('Processing images - Initial state', {
-      imageCount: images.length,
-      images: images.map(img => ({
-        mimeType: img.mimeType,
-        dataLength: img.data?.length,
-        isBase64: typeof img.data === 'string' && img.data.startsWith('data:'),
-        dataPreview: typeof img.data === 'string' ? 
-          img.data.substring(0, 50) + '...' : 
-          'non-string data'
-      }))
-    });
-
-    // Process images for OpenAI
-    const processedImages = images.map(img => {
-      let base64Data = img.data;
-      
-      // Remove data URL prefix if present
-      if (typeof base64Data === 'string' && base64Data.includes('base64,')) {
-        base64Data = base64Data.split('base64,')[1];
-      }
-
-      logger.debug('Processing image for OpenAI', {
-        mimeType: img.mimeType,
-        originalLength: img.data?.length,
-        processedLength: base64Data?.length,
-        hasBase64Prefix: typeof img.data === 'string' && img.data.includes('base64,')
-      });
-
-      return {
-        type: "image_url",
-        image_url: {
-          url: `data:${img.mimeType};base64,${base64Data}`
-        }
-      };
-    });
-    
     const imageAnalysisResponse = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -94,7 +57,12 @@ export async function processImages(images) {
           role: "user",
           content: [
             { type: "text", text: "Analyze these images of potential items for appraisal:" },
-            ...processedImages
+            ...images.map(img => ({
+              type: "image_url",
+              image_url: {
+                url: `data:${img.mimeType};base64,${img.data}`
+              }
+            }))
           ]
         }
       ],
