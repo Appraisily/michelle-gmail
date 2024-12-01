@@ -47,25 +47,37 @@ export async function classifyEmail(
             "requiresReply": boolean,
             "reason": string,
             "suggestedResponseType": "detailed" | "brief" | "confirmation"
-          }`
+          }
+
+          CRITICAL: When images are present and they show art or antique items:
+          - Always classify as "APPRAISAL_LEAD"
+          - Set urgency based on email content and context
+          - Always set requiresReply to true
+          - Set suggestedResponseType to "detailed"
+          - Include in reason whether it appears to be a preliminary inquiry or related to an existing appraisal`
         },
         {
           role: "user",
-          content: `Analyze this email thoroughly:\n\n${fullContext}`
+          content: `Analyze this email thoroughly:\n\n${fullContext}${
+            imageAttachments ? '\n\nThe email includes ' + imageAttachments.length + ' image(s) of items.' : ''
+          }`
         }
       ],
       temperature: 0.3,
       max_tokens: 500
     });
 
-    // Parse response using the new utility
+    // Parse response using the utility
     const classification = parseOpenAIResponse(classificationResponse.choices[0].message.content);
 
-    // Force APPRAISAL_LEAD for messages with images
+    // Force APPRAISAL_LEAD for messages with images of items
     if (imageAttachments && imageAttachments.length > 0) {
       classification.intent = "APPRAISAL_LEAD";
       classification.requiresReply = true;
       classification.suggestedResponseType = "detailed";
+      if (!classification.reason.includes("image")) {
+        classification.reason += " Email includes images of items for potential appraisal.";
+      }
     }
 
     recordMetric('email_classifications', 1);
@@ -73,7 +85,8 @@ export async function classifyEmail(
     logger.info('Email classification completed', {
       intent: classification.intent,
       urgency: classification.urgency,
-      requiresReply: classification.requiresReply
+      requiresReply: classification.requiresReply,
+      hasImages: !!imageAttachments?.length
     });
 
     return {
