@@ -51,30 +51,27 @@ export async function processImages(images) {
       images: images.map(img => ({
         mimeType: img.mimeType,
         dataLength: img.data?.length,
-        isBuffer: Buffer.isBuffer(img.data),
-        isString: typeof img.data === 'string',
-        dataPreview: Buffer.isBuffer(img.data) ? 
-          img.data.toString('hex').slice(0, 50) : 
-          typeof img.data === 'string' ? 
-            img.data.slice(0, 50) : 
-            'unknown format'
+        isBase64: typeof img.data === 'string' && img.data.startsWith('data:'),
+        dataPreview: typeof img.data === 'string' ? 
+          img.data.substring(0, 50) + '...' : 
+          'non-string data'
       }))
     });
 
-    // Format images for OpenAI
-    const formattedImages = images.map((img, index) => {
-      // Ensure data is base64 if it's a Buffer
-      const base64Data = Buffer.isBuffer(img.data) ? 
-        img.data.toString('base64') : 
-        img.data;
+    // Process images for OpenAI
+    const processedImages = images.map(img => {
+      let base64Data = img.data;
+      
+      // Remove data URL prefix if present
+      if (typeof base64Data === 'string' && base64Data.includes('base64,')) {
+        base64Data = base64Data.split('base64,')[1];
+      }
 
-      // Debug log each formatted image
-      logger.debug(`Formatting image ${index + 1}`, {
-        originalMimeType: img.mimeType,
-        base64Length: base64Data?.length,
-        base64Preview: base64Data?.slice(0, 50),
-        isValidBase64: /^[A-Za-z0-9+/=]+$/.test(base64Data || ''),
-        dataUrlPreview: `data:${img.mimeType};base64,${base64Data?.slice(0, 50)}`
+      logger.debug('Processing image for OpenAI', {
+        mimeType: img.mimeType,
+        originalLength: img.data?.length,
+        processedLength: base64Data?.length,
+        hasBase64Prefix: typeof img.data === 'string' && img.data.includes('base64,')
       });
 
       return {
@@ -83,15 +80,6 @@ export async function processImages(images) {
           url: `data:${img.mimeType};base64,${base64Data}`
         }
       };
-    });
-
-    // Debug log the final formatted images
-    logger.debug('Formatted images for OpenAI', {
-      count: formattedImages.length,
-      formattedImages: formattedImages.map(img => ({
-        type: img.type,
-        urlPreview: img.image_url.url.slice(0, 100)
-      }))
     });
     
     const imageAnalysisResponse = await openai.chat.completions.create({
@@ -106,7 +94,7 @@ export async function processImages(images) {
           role: "user",
           content: [
             { type: "text", text: "Analyze these images of potential items for appraisal:" },
-            ...formattedImages
+            ...processedImages
           ]
         }
       ],
