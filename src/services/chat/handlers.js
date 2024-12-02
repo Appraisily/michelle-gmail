@@ -57,6 +57,12 @@ export async function handleMessage(ws, data, client) {
     // Update client state for ALL message types
     client.lastMessage = Date.now();
 
+    // Handle confirmation messages
+    if (message.type === MessageType.CONFIRM) {
+      connectionManager.confirmMessageDelivery(message.messageId);
+      return;
+    }
+
     // Handle system messages
     if (message.type === MessageType.PING || 
         message.type === MessageType.PONG || 

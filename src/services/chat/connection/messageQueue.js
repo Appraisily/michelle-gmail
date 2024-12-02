@@ -78,6 +78,11 @@ export class MessageQueue {
         throw new Error('WebSocket not open');
       }
 
+      // Don't retry if message was already confirmed
+      if (!this.pendingMessages.has(messageId)) {
+        return;
+      }
+
       const serializedMessage = JSON.stringify(message);
       ws.send(serializedMessage);
 
@@ -101,6 +106,10 @@ export class MessageQueue {
   }
 
   confirmDelivery(messageId) {
+    if (!this.pendingMessages.has(messageId)) {
+      return false;
+    }
+
     // Clear all tracking for this message
     this.clearMessageTimeout(messageId);
     this.pendingMessages.delete(messageId);
