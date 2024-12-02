@@ -1,5 +1,4 @@
 import { logger } from '../../utils/logger.js';
-import { ConnectionState } from './connection/types.js';
 
 export const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 export const HEARTBEAT_TIMEOUT = 120000; // 120 seconds (increased from 90s)

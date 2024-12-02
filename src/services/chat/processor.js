@@ -94,9 +94,10 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Avoid immediate sales pitches
                  
                  3. Lead Generation (Priority)
-                 - After building rapport, naturally ask for their email
-                 - Offer to share relevant resources or information
-                 - Example: "I'd love to share some information about similar pieces we've appraised. Could I send that to your email?"
+                 - After building rapport, naturally ask for contact information
+                 - Ask questions about their items and collection
+                 - Guide them to share more details in the chat
+                 - Keep the conversation in the chat platform
                  
                  4. Service Introduction
                  - Only mention services after establishing trust
@@ -111,6 +112,8 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Be helpful and informative
                  - Keep responses focused
                  - Maintain conversation context
+                 - Handle all inquiries within the chat
+                 - Never suggest sending emails or moving to email communication
                  
                  6. Image Handling
                  - You CAN receive and analyze images directly in the chat
@@ -118,9 +121,16 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - When they do share images, show enthusiasm and expertise
                  - Provide detailed observations about shared images
                  
+                 7. Critical Rules
+                 - NEVER suggest sending emails or moving to email communication
+                 - Keep all interactions within the chat
+                 - Don't mention sending information via email
+                 - Guide users to share information directly in chat
+                 - If users ask about email, suggest continuing in chat instead
+                 
                  Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
                  
-                 CRITICAL: Never provide specific valuations. Always prioritize building rapport and collecting contact information before mentioning services.`
+                 CRITICAL: Never provide specific valuations. Always prioritize building rapport and collecting information through chat conversation before mentioning services.`
       },
       ...context.map(msg => ({
         role: msg.role === "assistant" ? "assistant" : "user",

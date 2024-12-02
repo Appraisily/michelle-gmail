@@ -1,17 +1,4 @@
-export const ConnectionState = {
-  CONNECTING: 0,
-  OPEN: 1,
-  CLOSING: 2,
-  CLOSED: 3
-};
-
-export const ConnectionStatus = {
-  PENDING: 'pending',
-  CONFIRMED: 'confirmed',
-  FAILED: 'failed',
-  DISCONNECTED: 'disconnected'
-};
-
+// Message Types
 export const MessageType = {
   CONNECT: 'connect',
   CONNECT_CONFIRM: 'connect_confirm',
@@ -26,6 +13,23 @@ export const MessageType = {
   STATUS: 'status' // New type for typing indicators
 };
 
+// Connection States
+export const ConnectionState = {
+  CONNECTING: 0,
+  OPEN: 1,
+  CLOSING: 2,
+  CLOSED: 3
+};
+
+// Connection Status
+export const ConnectionStatus = {
+  PENDING: 'pending',
+  CONFIRMED: 'confirmed',
+  FAILED: 'failed',
+  DISCONNECTED: 'disconnected'
+};
+
+// Message Status
 export const MessageStatus = {
   SENT: 'sent',
   RECEIVED: 'received',
@@ -33,6 +37,7 @@ export const MessageStatus = {
   FAILED: 'failed'
 };
 
+// Image Processing Status
 export const ImageProcessingStatus = {
   RECEIVED: 'received',
   PROCESSING: 'processing',
@@ -40,6 +45,7 @@ export const ImageProcessingStatus = {
   FAILED: 'failed'
 };
 
+// Image Validation
 export const ImageValidation = {
   MAX_SIZE: 10 * 1024 * 1024, // 10MB
   SUPPORTED_TYPES: [
