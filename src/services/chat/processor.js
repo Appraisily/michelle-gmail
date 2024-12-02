@@ -3,7 +3,6 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getOpenAIClient } from '../openai/client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
-import { dataHubClient } from '../dataHub/client.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -87,6 +86,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Share relevant expertise and insights
                  
                  2. When Analyzing Images
+                 - Acknowledge receipt of images enthusiastically
                  - Comment on specific, interesting details
                  - Share insights about style/period
                  - Show expertise through observations
@@ -111,6 +111,12 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Be helpful and informative
                  - Keep responses focused
                  - Maintain conversation context
+                 
+                 6. Image Handling
+                 - You CAN receive and analyze images directly in the chat
+                 - Always encourage customers to share images of their items
+                 - When they do share images, show enthusiasm and expertise
+                 - Provide detailed observations about shared images
                  
                  Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
                  
@@ -137,44 +143,6 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages,
-      functions: [{
-        name: "queryDataHub",
-        description: "Query DataHub API endpoints to get customer information",
-        parameters: {
-          type: "object",
-          properties: {
-            endpoint: {
-              type: "string",
-              description: "The endpoint path to query (e.g., /api/appraisals/pending)"
-            },
-            method: {
-              type: "string",
-              enum: ["GET"],
-              description: "HTTP method to use"
-            },
-            params: {
-              type: "object",
-              description: "Query parameters",
-              properties: {
-                email: {
-                  type: "string",
-                  description: "Customer email address"
-                },
-                sessionId: {
-                  type: "string",
-                  description: "Session ID for specific queries"
-                },
-                wordpressSlug: {
-                  type: "string",
-                  description: "WordPress URL slug"
-                }
-              }
-            }
-          },
-          required: ["endpoint", "method"]
-        }
-      }],
-      function_call: "auto",
       temperature: 0.7,
       max_tokens: 500
     });
@@ -182,70 +150,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     let reply = '';
     const responseId = uuidv4();
 
-    // Handle potential function calls
-    if (completion.choices[0].message.function_call) {
-      const functionCall = completion.choices[0].message.function_call;
-      const args = JSON.parse(functionCall.arguments);
-
-      logger.info('DataHub query requested', {
-        endpoint: args.endpoint,
-        method: args.method,
-        params: args.params,
-        timestamp: new Date().toISOString()
-      });
-
-      try {
-        const customerInfo = await dataHubClient.makeRequest(
-          args.endpoint,
-          args.method,
-          args.params
-        );
-
-        // Get completion with function result
-        const functionResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            ...messages,
-            {
-              role: "assistant",
-              content: "Let me check your records."
-            },
-            {
-              role: "function",
-              name: "queryDataHub",
-              content: JSON.stringify(customerInfo)
-            }
-          ],
-          temperature: 0.7
-        });
-
-        reply = functionResponse.choices[0].message.content;
-      } catch (error) {
-        logger.error('Error querying DataHub:', {
-          error: error.message,
-          endpoint: args.endpoint,
-          stack: error.stack,
-          timestamp: new Date().toISOString()
-        });
-
-        // Generate response acknowledging the error
-        const errorResponse = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            ...messages,
-            {
-              role: "assistant",
-              content: "I encountered an error while trying to access your records."
-            }
-          ],
-          temperature: 0.7
-        });
-
-        reply = errorResponse.choices[0].message.content;
-      }
-    } else {
-      reply = completion.choices[0].message.content;
-    }
+    reply = completion.choices[0].message.content;
 
     // Update conversation context
     if (message.content || message.images?.length > 0) {

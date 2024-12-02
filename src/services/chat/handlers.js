@@ -16,6 +16,7 @@ const TYPING_SPEED = 800;
 const MIN_TYPING_TIME = 2000; // Minimum 2 seconds
 const MAX_TYPING_TIME = 8000; // Maximum 8 seconds
 const THINKING_TIME = 3000; // Time to "think" before typing
+const MAX_CHUNK_LENGTH = 500; // Maximum length before splitting
 
 /**
  * Calculate typing delay based on message length
@@ -39,27 +40,41 @@ async function sendTypingIndicator(ws, client, isTyping) {
 }
 
 /**
- * Split long message into natural chunks
+ * Split message into natural chunks if needed
  */
 function splitMessage(message) {
-  // Split on sentence endings or natural break points
-  const chunks = message.match(/[^.!?]+[.!?]+/g) || [message];
+  // Only split if message exceeds max length
+  if (message.length <= MAX_CHUNK_LENGTH) {
+    return [message];
+  }
+
+  // Find natural break points (sentences or paragraphs)
+  const breakPoints = message.match(/[^.!?\n]+[.!?\n]+/g) || [message];
   
-  // Combine very short chunks
-  const result = [];
+  // Combine into maximum 2 chunks
+  const chunks = [];
   let currentChunk = '';
   
-  for (const chunk of chunks) {
-    if ((currentChunk + chunk).length < 100) {
-      currentChunk += chunk;
+  for (const point of breakPoints) {
+    // If adding this point would make first chunk too long, start second chunk
+    if (currentChunk && (currentChunk + point).length > MAX_CHUNK_LENGTH) {
+      chunks.push(currentChunk.trim());
+      currentChunk = point;
+      // Break if we already have 2 chunks
+      if (chunks.length === 2) {
+        break;
+      }
     } else {
-      if (currentChunk) result.push(currentChunk);
-      currentChunk = chunk;
+      currentChunk += point;
     }
   }
-  if (currentChunk) result.push(currentChunk);
   
-  return result;
+  // Add remaining text
+  if (currentChunk && chunks.length < 2) {
+    chunks.push(currentChunk.trim());
+  }
+  
+  return chunks;
 }
 
 export async function handleMessage(ws, data, client) {
@@ -165,7 +180,7 @@ export async function handleMessage(ws, data, client) {
       timestamp: new Date().toISOString()
     });
     
-    // Split response into natural chunks
+    // Split response if needed
     const messageChunks = splitMessage(response.content);
 
     // Send each chunk with natural delays
@@ -181,7 +196,7 @@ export async function handleMessage(ws, data, client) {
         type: MessageType.RESPONSE,
         clientId: client.id,
         messageId: `${response.messageId}-${index}`,
-        content: chunk.trim(),
+        content: chunk,
         replyTo: message.messageId,
         timestamp: new Date().toISOString()
       });
