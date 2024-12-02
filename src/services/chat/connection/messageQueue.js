@@ -1,9 +1,10 @@
 import { logger } from '../../../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
+import { getCurrentTimestamp } from '../utils/timeUtils.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
-const MESSAGE_TIMEOUT = 10000; // 10 seconds (increased from 5000)
+const MESSAGE_TIMEOUT = 10000; // 10 seconds
 
 export class MessageQueue {
   constructor() {
@@ -12,21 +13,20 @@ export class MessageQueue {
     this.retryAttempts = new Map();
   }
 
-  /**
-   * Add message to pending queue
-   * @param {string} messageId Message identifier
-   * @param {WebSocket} ws WebSocket connection
-   * @param {Message} message Message data
-   */
   addPendingMessage(messageId, ws, message) {
-    this.pendingMessages.set(messageId, { ws, message });
-    this.setMessageTimeout(messageId);
+    // Only track non-system messages
+    if (message.type === 'message' || message.type === 'response') {
+      this.pendingMessages.set(messageId, { ws, message });
+      this.setMessageTimeout(messageId);
+      
+      logger.debug('Message added to pending queue', {
+        messageId,
+        type: message.type,
+        timestamp: getCurrentTimestamp()
+      });
+    }
   }
 
-  /**
-   * Set timeout for message confirmation
-   * @param {string} messageId Message identifier
-   */
   setMessageTimeout(messageId) {
     const timeout = setTimeout(() => {
       this.handleMessageTimeout(messageId);
@@ -35,10 +35,6 @@ export class MessageQueue {
     this.messageTimeouts.set(messageId, timeout);
   }
 
-  /**
-   * Clear message timeout
-   * @param {string} messageId Message identifier
-   */
   clearMessageTimeout(messageId) {
     const timeout = this.messageTimeouts.get(messageId);
     if (timeout) {
@@ -47,109 +43,87 @@ export class MessageQueue {
     }
   }
 
-  /**
-   * Handle message timeout
-   * @param {string} messageId Message identifier
-   */
   async handleMessageTimeout(messageId) {
     const pending = this.pendingMessages.get(messageId);
     if (!pending) return;
 
     const { ws, message } = pending;
-    const retryKey = `${message.clientId}:${messageId}`;
-    const retryCount = this.retryAttempts.get(retryKey) || 0;
+    const retryCount = this.retryAttempts.get(messageId) || 0;
 
     if (retryCount < MAX_RETRIES) {
       logger.warn('Message delivery timeout, attempting retry', {
         messageId,
         clientId: message.clientId,
         retryCount,
-        timestamp: new Date().toISOString()
+        timestamp: getCurrentTimestamp()
       });
 
-      await this.retryMessage(ws, message, retryCount);
+      await this.retryMessage(ws, message, messageId, retryCount);
     } else {
       this.cleanupMessage(messageId);
       logger.error('Message delivery failed after retries', {
         messageId,
         clientId: message.clientId,
-        timestamp: new Date().toISOString()
+        timestamp: getCurrentTimestamp()
       });
     }
   }
 
-  /**
-   * Retry sending a message
-   * @param {WebSocket} ws WebSocket connection
-   * @param {Message} message Message to retry
-   * @param {number} retryCount Current retry attempt
-   */
-  async retryMessage(ws, message, retryCount) {
-    const retryKey = `${message.clientId}:${message.messageId}`;
+  async retryMessage(ws, message, messageId, retryCount) {
     const delay = RETRY_DELAY * Math.pow(2, retryCount);
-
     await new Promise(resolve => setTimeout(resolve, delay));
 
     try {
+      if (ws.readyState !== 1) { // WebSocket.OPEN
+        throw new Error('WebSocket not open');
+      }
+
       const serializedMessage = JSON.stringify(message);
       ws.send(serializedMessage);
 
-      this.retryAttempts.set(retryKey, retryCount + 1);
+      this.retryAttempts.set(messageId, retryCount + 1);
 
       logger.info('Message retry attempt', {
-        messageId: message.messageId,
+        messageId,
         clientId: message.clientId,
         retryCount: retryCount + 1,
-        timestamp: new Date().toISOString()
+        timestamp: getCurrentTimestamp()
       });
     } catch (error) {
       logger.error('Message retry failed', {
         error: error.message,
-        messageId: message.messageId,
+        messageId,
         clientId: message.clientId,
-        timestamp: new Date().toISOString()
+        timestamp: getCurrentTimestamp()
       });
+      this.cleanupMessage(messageId);
     }
   }
 
-  /**
-   * Confirm message delivery
-   * @param {string} messageId Message identifier
-   */
   confirmDelivery(messageId) {
+    // Clear all tracking for this message
     this.clearMessageTimeout(messageId);
     this.pendingMessages.delete(messageId);
+    this.retryAttempts.delete(messageId);
     
     logger.debug('Message delivery confirmed', { 
       messageId,
-      timestamp: new Date().toISOString()
+      timestamp: getCurrentTimestamp()
     });
+
+    return true;
   }
 
-  /**
-   * Clean up message data
-   * @param {string} messageId Message identifier
-   */
   cleanupMessage(messageId) {
     this.clearMessageTimeout(messageId);
     this.pendingMessages.delete(messageId);
+    this.retryAttempts.delete(messageId);
   }
 
-  /**
-   * Clean up all message data for a client
-   * @param {string} clientId Client identifier
-   */
   cleanupClientMessages(clientId) {
     for (const [messageId, data] of this.pendingMessages.entries()) {
       if (data.message.clientId === clientId) {
         this.cleanupMessage(messageId);
-      }
-    }
-
-    // Clean up retry attempts
-    for (const key of this.retryAttempts.keys()) {
-      if (key.startsWith(`${clientId}:`)) {
-        this.retryAttempts.delete(key);
       }
     }
   }

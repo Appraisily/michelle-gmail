@@ -1,6 +1,6 @@
 import { logger } from '../../../utils/logger.js';
 import { ConnectionState } from './types.js';
-import { getCurrentTimestamp, isoToUnix } from '../utils/timeUtils.js';
+import { getCurrentTimestamp } from '../utils/timeUtils.js';
 
 export class ConnectionStateManager {
   constructor() {
@@ -53,15 +53,20 @@ export class ConnectionStateManager {
     return ws.readyState === ConnectionState.OPEN;
   }
 
-  updateActivity(ws) {
+  updateActivity(ws, messageType) {
     const connection = this.connections.get(ws);
     if (connection) {
       const now = Date.now();
       connection.lastActivity = now;
-      connection.lastMessage = now;
+      
+      // Update lastMessage for all message types except status updates
+      if (messageType !== 'status') {
+        connection.lastMessage = now;
+      }
       
       logger.debug('Updated client activity', {
         clientId: connection.id,
+        messageType,
         timestamp: getCurrentTimestamp()
       });
     }
