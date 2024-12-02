@@ -1,12 +1,9 @@
 import { logger } from '../../utils/logger.js';
 
 export const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-export const HEARTBEAT_TIMEOUT = 120000; // 120 seconds (increased from 90s)
+export const HEARTBEAT_TIMEOUT = 300000; // 5 minutes (increased from 2 minutes)
 export const INITIAL_GRACE_PERIOD = 45000; // 45 second initial grace period
 
-/**
- * Sets up heartbeat monitoring for WebSocket connections
- */
 export function setupHeartbeat(wss, connectionManager) {
   const interval = setInterval(() => {
     wss.clients.forEach((ws) => {
@@ -26,12 +23,12 @@ export function setupHeartbeat(wss, connectionManager) {
         return;
       }
 
-      // Check last pong time
-      const lastPongAge = Date.now() - (client.lastPong || 0);
-      if (lastPongAge > HEARTBEAT_TIMEOUT) {
+      // Check last activity time
+      const lastActivityAge = Date.now() - client.lastActivity;
+      if (lastActivityAge > HEARTBEAT_TIMEOUT) {
         logger.info('Client exceeded heartbeat timeout', {
           clientId: client.id,
-          lastPongAge,
+          lastActivityAge,
           timeout: HEARTBEAT_TIMEOUT,
           timestamp: new Date().toISOString()
         });
@@ -45,7 +42,7 @@ export function setupHeartbeat(wss, connectionManager) {
           clientId: client.id,
           conversationId: client.conversationId,
           lastMessage: new Date(client.lastMessage).toISOString(),
-          inactiveTime: Date.now() - client.lastMessage
+          inactiveTime: Date.now() - client.lastActivity
         });
         
         connectionManager.removeConnection(ws);
@@ -84,14 +81,11 @@ export function setupHeartbeat(wss, connectionManager) {
   return interval;
 }
 
-/**
- * Handles pong response from client
- */
 export function handlePong(ws, client) {
   if (client) {
     client.isAlive = true;
     client.lastPong = Date.now();
-    client.lastMessage = Date.now(); // Update lastMessage on pong too
+    client.lastActivity = Date.now(); // Update activity timestamp
     
     logger.debug('Received pong from client', {
       clientId: client.id,

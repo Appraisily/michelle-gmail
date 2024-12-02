@@ -59,8 +59,8 @@ export class ConnectionStateManager {
       const now = Date.now();
       connection.lastActivity = now;
       
-      // Update lastMessage for all message types except status updates
-      if (messageType !== 'status') {
+      // Update lastMessage for all non-system messages
+      if (messageType !== 'ping' && messageType !== 'pong' && messageType !== 'status') {
         connection.lastMessage = now;
       }
       
