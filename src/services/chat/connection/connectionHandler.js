@@ -2,6 +2,7 @@ import { logger } from '../../../utils/logger.js';
 import { connectionManager } from './manager.js';
 import { MessageType, ConnectionState, ConnectionStatus } from './types.js';
 import { messageStore } from '../persistence/messageStore.js';
+import { logChatConversation } from '../logger/chatLogger.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const CONNECTION_TIMEOUT = 5000; // 5 seconds
@@ -60,8 +61,10 @@ export async function handleInitialConnection(ws, message, clientIp) {
       connectedAt: Date.now(),
       lastMessage: Date.now(),
       messageCount: 0,
+      imageCount: 0,
       conversationId: uuidv4(),
-      status: ConnectionStatus.PENDING
+      status: ConnectionStatus.PENDING,
+      messages: []
     };
 
     // Add to connection manager
@@ -135,6 +138,21 @@ export async function handleDisconnect(ws) {
       // Update client status
       client.status = ConnectionStatus.DISCONNECTED;
 
+      // Calculate conversation duration
+      const duration = Math.floor((Date.now() - client.connectedAt) / 1000);
+
+      // Log conversation to sheets
+      await logChatConversation({
+        timestamp: new Date().toISOString(),
+        clientId: client.id,
+        conversationId: client.conversationId,
+        duration,
+        messageCount: client.messageCount,
+        imageCount: client.imageCount,
+        hasImages: client.imageCount > 0,
+        conversation: client.messages
+      });
+
       // Save conversation state
       await messageStore.saveConversationState(client.id, {
         conversationId: client.conversationId,
@@ -146,7 +164,8 @@ export async function handleDisconnect(ws) {
         clientId: client.id,
         conversationId: client.conversationId,
         messageCount: client.messageCount,
-        duration: Date.now() - client.lastMessage,
+        imageCount: client.imageCount,
+        duration,
         timestamp: new Date().toISOString()
       });
 
