@@ -41,63 +41,6 @@ function updateConversationContext(clientId, role, content, messageId) {
   }
 }
 
-export async function processImages(images) {
-  try {
-    const openai = await getOpenAIClient();
-    
-    const imageAnalysisResponse = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You are an expert art and antiques appraiser. Analyze the provided images and provide detailed observations.
-                   Use this company knowledge base: ${JSON.stringify(companyKnowledge)}`
-        },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Analyze these images of potential items for appraisal:" },
-            ...images.map(img => ({
-              type: "image_url",
-              image_url: {
-                url: `data:${img.mimeType};base64,${img.data}`
-              }
-            }))
-          ]
-        }
-      ],
-      temperature: 0.7
-    });
-
-    const analysis = imageAnalysisResponse.choices[0].message.content;
-    
-    logger.info('Image analysis completed', {
-      imageCount: images.length,
-      analysisLength: analysis.length,
-      timestamp: new Date().toISOString()
-    });
-
-    recordMetric('image_analyses', 1);
-
-    // Return formatted chat response
-    const responseId = uuidv4();
-    return {
-      messageId: responseId,
-      content: analysis,
-      timestamp: new Date().toISOString()
-    };
-
-  } catch (error) {
-    logger.error('Error analyzing images:', {
-      error: error.message,
-      stack: error.stack,
-      timestamp: new Date().toISOString()
-    });
-    recordMetric('image_analysis_failures', 1);
-    throw error;
-  }
-}
-
 export async function processChat(message, clientId) {
   try {
     // Process chat message
@@ -122,6 +65,17 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     // Get available DataHub endpoints
     const endpoints = await dataHubClient.fetchEndpoints();
 
+    // Format messages array with images if present
+    const userContent = message.images?.length > 0 ? [
+      { type: "text", text: message.content || '' },
+      ...message.images.map(img => ({
+        type: "image_url",
+        image_url: {
+          url: `data:${img.mimeType};base64,${img.data.toString('base64')}`
+        }
+      }))
+    ] : message.content || '';
+
     // Format conversation history for OpenAI
     const messages = [
       {
@@ -143,7 +97,14 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - Never provide specific valuations in chat
                  - Maintain conversation context
                  - Keep responses concise but helpful
-                 - Check customer records when asked about appraisals or orders`
+                 - Check customer records when asked about appraisals or orders
+                 
+                 When analyzing images:
+                 - Provide detailed observations about the items
+                 - Comment on style, condition, and notable features
+                 - Never provide specific valuations
+                 - Guide towards professional appraisal service
+                 - Be encouraging and professional`
       },
       ...context.map(msg => ({
         role: msg.role === "assistant" ? "assistant" : "user",
@@ -151,13 +112,15 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       })),
       {
         role: "user",
-        content: message.content || ''
+        content: userContent
       }
     ];
 
     logger.debug('Sending chat request to OpenAI', {
       clientId,
       messageCount: messages.length,
+      hasImages: message.images?.length > 0,
+      imageCount: message.images?.length || 0,
       latestMessage: message.content
     });
 
@@ -275,8 +238,8 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     }
 
     // Update conversation context
-    if (message.content) {
-      updateConversationContext(clientId, "user", message.content, message.messageId);
+    if (message.content || message.images?.length > 0) {
+      updateConversationContext(clientId, "user", userContent, message.messageId);
     }
     updateConversationContext(clientId, "assistant", reply, responseId);
 

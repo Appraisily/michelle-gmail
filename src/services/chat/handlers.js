@@ -3,7 +3,7 @@ import { connectionManager } from './connection/manager.js';
 import { MessageType, ConnectionState } from './connection/types.js';
 import { processChat } from './processor.js';
 import { validateMessage } from './validators/messageValidator.js';
-import { handleImages } from './handlers/imageHandler.js';
+import { validateAndPrepareImages } from './handlers/imageHandler.js';
 import { handleDisconnectRequest } from './connection/connectionHandler.js';
 import { 
   handleMessageError, 
@@ -61,9 +61,14 @@ export async function handleMessage(ws, data, client) {
       timestamp: new Date().toISOString()
     });
 
-    // Handle images if present
+    // Validate and prepare images if present
     if (message.images?.length > 0) {
-      await handleImages(ws, message, client);
+      const imageValidation = validateAndPrepareImages(message.images);
+      if (!imageValidation.isValid) {
+        await handleValidationError(ws, client, message.messageId, imageValidation.errors);
+        return;
+      }
+      message.images = imageValidation.images;
     }
 
     // Process message
@@ -75,7 +80,6 @@ export async function handleMessage(ws, data, client) {
         messageId: response.messageId,
         content: response.content,
         replyTo: message.messageId,
-        ...(response.imageAnalysis && { imageAnalysis: response.imageAnalysis }),
         timestamp: new Date().toISOString()
       });
     }
