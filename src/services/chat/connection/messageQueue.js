@@ -12,33 +12,39 @@ export class MessageQueue {
     this.pendingMessages = new Map();
     this.messageTimeouts = new Map();
     this.retryAttempts = new Map();
-    this.confirmedMessages = new Set(); // Track confirmed messages
+    this.confirmedMessages = new Set();
   }
 
   addPendingMessage(messageId, ws, message) {
-    // Don't add if already confirmed
+    // Skip if message is already confirmed
     if (this.confirmedMessages.has(messageId)) {
       return;
     }
 
-    // Only track messages that need confirmation
-    if (message.type === MessageType.MESSAGE || 
-        message.type === MessageType.RESPONSE) {
-      this.pendingMessages.set(messageId, { ws, message });
-      this.setMessageTimeout(messageId);
-      
-      logger.debug('Message added to pending queue', {
-        messageId,
-        type: message.type,
-        timestamp: getCurrentTimestamp()
-      });
+    // Only queue messages that need confirmation
+    if (message.type !== MessageType.MESSAGE && 
+        message.type !== MessageType.RESPONSE) {
+      return;
     }
+
+    this.pendingMessages.set(messageId, { ws, message });
+    this.setMessageTimeout(messageId);
+
+    logger.debug('Message added to pending queue', {
+      messageId,
+      type: message.type,
+      timestamp: getCurrentTimestamp()
+    });
   }
 
   setMessageTimeout(messageId) {
-    // Clear existing timeout if any
-    this.clearMessageTimeout(messageId);
+    // Skip if message is already confirmed
+    if (this.confirmedMessages.has(messageId)) {
+      return;
+    }
 
+    this.clearMessageTimeout(messageId);
+    
     const timeout = setTimeout(() => {
       this.handleMessageTimeout(messageId);
     }, MESSAGE_TIMEOUT);
@@ -55,7 +61,7 @@ export class MessageQueue {
   }
 
   async handleMessageTimeout(messageId) {
-    // Don't handle timeout if message was confirmed
+    // Skip if message is already confirmed
     if (this.confirmedMessages.has(messageId)) {
       this.cleanupMessage(messageId);
       return;
@@ -87,7 +93,7 @@ export class MessageQueue {
   }
 
   async retryMessage(ws, message, messageId, retryCount) {
-    // Don't retry if already confirmed
+    // Skip if message is already confirmed
     if (this.confirmedMessages.has(messageId)) {
       this.cleanupMessage(messageId);
       return;
@@ -97,12 +103,13 @@ export class MessageQueue {
     await new Promise(resolve => setTimeout(resolve, delay));
 
     try {
-      if (ws.readyState !== 1) { // WebSocket.OPEN
+      if (ws.readyState !== 1) {
         throw new Error('WebSocket not open');
       }
 
-      // Don't retry if message was already confirmed
-      if (!this.pendingMessages.has(messageId)) {
+      // Final check before sending
+      if (this.confirmedMessages.has(messageId)) {
+        this.cleanupMessage(messageId);
         return;
       }
 
@@ -110,6 +117,7 @@ export class MessageQueue {
       ws.send(serializedMessage);
 
       this.retryAttempts.set(messageId, retryCount + 1);
+      this.setMessageTimeout(messageId);
 
       logger.info('Message retry attempt', {
         messageId,
@@ -129,20 +137,20 @@ export class MessageQueue {
   }
 
   confirmDelivery(messageId) {
-    // Add to confirmed set
+    // Add to confirmed set first
     this.confirmedMessages.add(messageId);
 
-    // Clear all tracking for this message
+    // Clean up all tracking for this message
     this.clearMessageTimeout(messageId);
     this.pendingMessages.delete(messageId);
     this.retryAttempts.delete(messageId);
-    
-    logger.debug('Message delivery confirmed', { 
+
+    logger.debug('Message delivery confirmed', {
       messageId,
       timestamp: getCurrentTimestamp()
     });
 
-    // Clean up old confirmed messages periodically
+    // Clean up old confirmed messages
     if (this.confirmedMessages.size > 1000) {
       const oldestMessages = Array.from(this.confirmedMessages).slice(0, 500);
       oldestMessages.forEach(id => this.confirmedMessages.delete(id));

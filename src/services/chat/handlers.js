@@ -5,41 +5,6 @@ import { processChat } from './processor.js';
 import { validateAndPrepareImages } from './handlers/imageHandler.js';
 import { getCurrentTimestamp } from './utils/timeUtils.js';
 
-/**
- * Handle message error
- */
-async function handleMessageError(ws, error, client, messageId) {
-  logger.error('Error handling message', {
-    error: error.message,
-    clientId: client?.id,
-    messageId,
-    stack: error.stack,
-    timestamp: getCurrentTimestamp()
-  });
-
-  try {
-    if (ws.readyState === ConnectionState.OPEN) {
-      await connectionManager.sendMessage(ws, {
-        type: MessageType.ERROR,
-        clientId: client?.id,
-        messageId,
-        error: 'An error occurred while processing your message',
-        timestamp: getCurrentTimestamp()
-      });
-    }
-  } catch (sendError) {
-    logger.error('Failed to send error message', {
-      error: sendError.message,
-      clientId: client?.id,
-      stack: sendError.stack,
-      timestamp: getCurrentTimestamp()
-    });
-  }
-}
-
-/**
- * Handle incoming messages
- */
 export async function handleMessage(ws, data, client) {
   try {
     // Verify connection state
@@ -54,14 +19,8 @@ export async function handleMessage(ws, data, client) {
 
     const message = JSON.parse(data);
 
-    // Update client state for ALL message types
-    client.lastMessage = Date.now();
-    client.messageCount = (client.messageCount || 0) + 1;
-
-    // Initialize messages array if not exists
-    if (!client.messages) {
-      client.messages = [];
-    }
+    // Update activity timestamp for ALL message types
+    client.lastActivity = Date.now();
 
     // Handle confirmation messages
     if (message.type === MessageType.CONFIRM) {
@@ -73,18 +32,14 @@ export async function handleMessage(ws, data, client) {
     if (message.type === MessageType.PING || 
         message.type === MessageType.PONG || 
         message.type === MessageType.STATUS) {
-      // Just confirm receipt for system messages
-      await connectionManager.sendMessage(ws, {
-        type: MessageType.CONFIRM,
-        clientId: client.id,
-        messageId: message.messageId,
-        status: 'received',
-        timestamp: getCurrentTimestamp()
-      });
       return;
     }
 
-    // Log incoming message
+    // Update message count for non-system messages
+    if (message.type === MessageType.MESSAGE) {
+      client.messageCount = (client.messageCount || 0) + 1;
+    }
+
     logger.info('Processing chat message', {
       clientId: client.id,
       conversationId: client.conversationId,
@@ -94,16 +49,6 @@ export async function handleMessage(ws, data, client) {
       messageType: message.type,
       timestamp: getCurrentTimestamp()
     });
-
-    // Store user message in conversation history
-    if (message.content || message.images?.length > 0) {
-      client.messages.push({
-        role: 'user',
-        content: message.content || '',
-        hasImages: !!message.images?.length,
-        timestamp: getCurrentTimestamp()
-      });
-    }
 
     // Send delivery confirmation
     await connectionManager.sendMessage(ws, {
@@ -127,8 +72,7 @@ export async function handleMessage(ws, data, client) {
     if (message.images?.length > 0) {
       const validation = validateAndPrepareImages(message.images);
       if (!validation.isValid) {
-        await handleMessageError(ws, new Error(validation.errors.join(', ')), client, message.messageId);
-        return;
+        throw new Error(validation.errors.join(', '));
       }
       message.images = validation.images;
       client.imageCount = (client.imageCount || 0) + message.images.length;
@@ -137,7 +81,20 @@ export async function handleMessage(ws, data, client) {
     // Process message
     const response = await processChat(message, client.id);
 
-    // Store assistant response in conversation history
+    // Store message in conversation history
+    if (!client.messages) {
+      client.messages = [];
+    }
+
+    if (message.content || message.images?.length > 0) {
+      client.messages.push({
+        role: 'user',
+        content: message.content || '',
+        hasImages: !!message.images?.length,
+        timestamp: getCurrentTimestamp()
+      });
+    }
+
     client.messages.push({
       role: 'assistant',
       content: response.content,
@@ -164,6 +121,31 @@ export async function handleMessage(ws, data, client) {
     });
 
   } catch (error) {
-    await handleMessageError(ws, error, client, message?.messageId);
+    logger.error('Error handling message', {
+      error: error.message,
+      clientId: client?.id,
+      messageId: message?.messageId,
+      stack: error.stack,
+      timestamp: getCurrentTimestamp()
+    });
+
+    try {
+      if (ws.readyState === ConnectionState.OPEN) {
+        await connectionManager.sendMessage(ws, {
+          type: MessageType.ERROR,
+          clientId: client?.id,
+          messageId: message?.messageId,
+          error: 'An error occurred while processing your message',
+          timestamp: getCurrentTimestamp()
+        });
+      }
+    } catch (sendError) {
+      logger.error('Failed to send error message', {
+        error: sendError.message,
+        clientId: client?.id,
+        stack: sendError.stack,
+        timestamp: getCurrentTimestamp()
+      });
+    }
   }
 }
