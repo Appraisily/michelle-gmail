@@ -78,7 +78,15 @@ export async function processImages(images) {
     });
 
     recordMetric('image_analyses', 1);
-    return analysis;
+
+    // Return formatted chat response
+    const responseId = uuidv4();
+    return {
+      messageId: responseId,
+      content: analysis,
+      timestamp: new Date().toISOString()
+    };
+
   } catch (error) {
     logger.error('Error analyzing images:', {
       error: error.message,
@@ -92,14 +100,8 @@ export async function processImages(images) {
 
 export async function processChat(message, clientId) {
   try {
-    // Skip processing for non-chat messages
-    if (!message.content) {
-      return null;
-    }
-
     // Process chat message
     return await processWithRetry(message, clientId);
-
   } catch (error) {
     logger.error('Error in chat processor:', {
       error: error.message,
@@ -149,7 +151,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
       })),
       {
         role: "user",
-        content: message.content
+        content: message.content || ''
       }
     ];
 
@@ -273,7 +275,9 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     }
 
     // Update conversation context
-    updateConversationContext(clientId, "user", message.content, message.messageId);
+    if (message.content) {
+      updateConversationContext(clientId, "user", message.content, message.messageId);
+    }
     updateConversationContext(clientId, "assistant", reply, responseId);
 
     logger.info('Chat response generated', {
