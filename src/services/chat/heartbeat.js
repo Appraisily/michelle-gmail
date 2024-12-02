@@ -92,6 +92,7 @@ export function handlePong(ws, client) {
   if (client) {
     client.isAlive = true;
     client.lastPong = Date.now();
+    client.lastMessage = Date.now(); // Update lastMessage on pong too
     
     logger.debug('Received pong from client', {
       clientId: client.id,

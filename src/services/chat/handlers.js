@@ -91,7 +91,10 @@ export async function handleMessage(ws, data, client) {
 
     const message = JSON.parse(data);
 
-    // Skip processing for system messages
+    // Update client state for ALL message types
+    client.lastMessage = Date.now();
+
+    // Handle system messages
     if (message.type === MessageType.PING || 
         message.type === MessageType.PONG || 
         message.type === MessageType.STATUS) {
@@ -119,8 +122,7 @@ export async function handleMessage(ws, data, client) {
       return;
     }
 
-    // Update client state
-    client.lastMessage = Date.now();
+    // Update message count for non-system messages
     client.messageCount++;
 
     // Track message in client's conversation history
