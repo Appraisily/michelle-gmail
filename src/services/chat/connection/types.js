@@ -22,7 +22,8 @@ export const MessageType = {
   PONG: 'pong',
   CONFIRM: 'confirm',
   IMAGE_STATUS: 'image_status',
-  DISCONNECT: 'disconnect'
+  DISCONNECT: 'disconnect',
+  STATUS: 'status' // New type for typing indicators
 };
 
 export const MessageStatus = {

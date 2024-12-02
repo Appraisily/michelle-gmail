@@ -11,6 +11,57 @@ import {
   handleWebSocketError 
 } from './errors/errorHandler.js';
 
+// Typing speed simulation (characters per minute)
+const TYPING_SPEED = 800;
+const MIN_TYPING_TIME = 2000; // Minimum 2 seconds
+const MAX_TYPING_TIME = 8000; // Maximum 8 seconds
+const THINKING_TIME = 3000; // Time to "think" before typing
+
+/**
+ * Calculate typing delay based on message length
+ */
+function calculateTypingDelay(message) {
+  const charCount = message.length;
+  const typingTime = (charCount / TYPING_SPEED) * 60 * 1000; // Convert to milliseconds
+  return Math.min(Math.max(typingTime, MIN_TYPING_TIME), MAX_TYPING_TIME);
+}
+
+/**
+ * Send typing indicator
+ */
+async function sendTypingIndicator(ws, client, isTyping) {
+  await connectionManager.sendMessage(ws, {
+    type: MessageType.STATUS,
+    clientId: client.id,
+    status: isTyping ? 'typing' : 'idle',
+    timestamp: new Date().toISOString()
+  });
+}
+
+/**
+ * Split long message into natural chunks
+ */
+function splitMessage(message) {
+  // Split on sentence endings or natural break points
+  const chunks = message.match(/[^.!?]+[.!?]+/g) || [message];
+  
+  // Combine very short chunks
+  const result = [];
+  let currentChunk = '';
+  
+  for (const chunk of chunks) {
+    if ((currentChunk + chunk).length < 100) {
+      currentChunk += chunk;
+    } else {
+      if (currentChunk) result.push(currentChunk);
+      currentChunk = chunk;
+    }
+  }
+  if (currentChunk) result.push(currentChunk);
+  
+  return result;
+}
+
 export async function handleMessage(ws, data, client) {
   try {
     // Verify connection state
@@ -24,6 +75,21 @@ export async function handleMessage(ws, data, client) {
     }
 
     const message = JSON.parse(data);
+
+    // Skip processing for system messages
+    if (message.type === MessageType.PING || 
+        message.type === MessageType.PONG || 
+        message.type === MessageType.STATUS) {
+      // Just confirm receipt for system messages
+      await connectionManager.sendMessage(ws, {
+        type: MessageType.CONFIRM,
+        clientId: client.id,
+        messageId: message.messageId,
+        status: 'received',
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
 
     // Validate message format
     const validationResult = validateMessage(message);
@@ -41,6 +107,16 @@ export async function handleMessage(ws, data, client) {
     // Update client state
     client.lastMessage = Date.now();
     client.messageCount++;
+
+    // Track message in client's conversation history
+    if (message.content || message.images?.length > 0) {
+      client.messages.push({
+        type: 'user',
+        content: message.content,
+        hasImages: !!message.images?.length,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     logger.info('Processing chat message', {
       clientId: client.id,
@@ -69,20 +145,57 @@ export async function handleMessage(ws, data, client) {
         return;
       }
       message.images = imageValidation.images;
+      client.imageCount += message.images.length;
+      
+      // Show "thinking" indicator for images
+      await sendTypingIndicator(ws, client, false);
+      await new Promise(resolve => setTimeout(resolve, THINKING_TIME));
     }
+
+    // Show typing indicator
+    await sendTypingIndicator(ws, client, true);
 
     // Process message
     const response = await processChat(message, client.id);
-    if (response) {
+    
+    // Track response in client's conversation history
+    client.messages.push({
+      type: 'assistant',
+      content: response.content,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Split response into natural chunks
+    const messageChunks = splitMessage(response.content);
+
+    // Send each chunk with natural delays
+    for (const [index, chunk] of messageChunks.entries()) {
+      // Calculate typing time based on chunk length
+      const typingTime = calculateTypingDelay(chunk);
+      
+      // Wait for "typing" time
+      await new Promise(resolve => setTimeout(resolve, typingTime));
+
+      // Send chunk
       await connectionManager.sendMessage(ws, {
         type: MessageType.RESPONSE,
         clientId: client.id,
-        messageId: response.messageId,
-        content: response.content,
+        messageId: `${response.messageId}-${index}`,
+        content: chunk.trim(),
         replyTo: message.messageId,
         timestamp: new Date().toISOString()
       });
+
+      // If not last chunk, add small pause and show typing again
+      if (index < messageChunks.length - 1) {
+        await sendTypingIndicator(ws, client, false);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await sendTypingIndicator(ws, client, true);
+      }
     }
+
+    // Stop typing indicator
+    await sendTypingIndicator(ws, client, false);
 
   } catch (error) {
     await handleMessageError(ws, error, client, message?.messageId);

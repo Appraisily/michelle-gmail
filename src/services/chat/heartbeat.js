@@ -2,14 +2,11 @@ import { logger } from '../../utils/logger.js';
 import { ConnectionState } from './connection/types.js';
 
 export const HEARTBEAT_INTERVAL = 30000; // 30 seconds
-export const HEARTBEAT_TIMEOUT = 90000; // 90 seconds (3x interval for grace period)
+export const HEARTBEAT_TIMEOUT = 120000; // 120 seconds (increased from 90s)
 export const INITIAL_GRACE_PERIOD = 45000; // 45 second initial grace period
 
 /**
  * Sets up heartbeat monitoring for WebSocket connections
- * @param {WebSocketServer} wss - The WebSocket server instance
- * @param {ConnectionManager} connectionManager - Connection manager instance
- * @returns {NodeJS.Timer} The heartbeat interval
  */
 export function setupHeartbeat(wss, connectionManager) {
   const interval = setInterval(() => {
@@ -78,7 +75,6 @@ export function setupHeartbeat(wss, connectionManager) {
     });
   }, HEARTBEAT_INTERVAL);
 
-  // Log heartbeat service start
   logger.info('Heartbeat service initialized', {
     interval: HEARTBEAT_INTERVAL,
     timeout: HEARTBEAT_TIMEOUT,
@@ -91,8 +87,6 @@ export function setupHeartbeat(wss, connectionManager) {
 
 /**
  * Handles pong response from client
- * @param {WebSocket} ws - The WebSocket connection
- * @param {Object} client - Client data object
  */
 export function handlePong(ws, client) {
   if (client) {
