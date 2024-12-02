@@ -1,20 +1,20 @@
 import { logger } from '../../../utils/logger.js';
 import { connectionState } from './state.js';
-import { messageTracker } from './messageTracker.js';
-import { messageStore } from '../persistence/messageStore.js';
-import { MessageType, MessageStatus, ConnectionState } from './types.js';
+import { messageQueue } from './messageQueue.js';
+import { MessageType, ConnectionState, ImageProcessingStatus } from './types.js';
 import { v4 as uuidv4 } from 'uuid';
 
 export class ConnectionManager {
   constructor() {
     this.state = connectionState;
-    this.pendingConfirmations = new Map();
+    this.messageQueue = messageQueue;
   }
 
   addConnection(ws, clientData) {
     if (ws.readyState <= ConnectionState.OPEN) {
       // Initialize connection state
       clientData.connectedAt = Date.now();
+      clientData.lastMessage = Date.now();
       clientData.lastPong = Date.now();
       clientData.isAlive = true;
 
@@ -50,6 +50,13 @@ export class ConnectionManager {
         return false;
       }
 
+      // Get client info to update activity
+      const client = this.getConnectionInfo(ws);
+      if (client) {
+        // Update lastMessage for ALL message types
+        client.lastMessage = Date.now();
+      }
+
       // Ensure message has an ID
       const messageId = message.messageId || uuidv4();
       message.messageId = messageId;
@@ -58,19 +65,7 @@ export class ConnectionManager {
       if (message.type === MessageType.MESSAGE || 
           message.type === MessageType.RESPONSE) {
         // Only track non-system messages
-        messageTracker.trackMessage(messageId, message.clientId);
-        
-        // Save message to persistent store
-        await messageStore.saveMessage(message.clientId, {
-          ...message,
-          status: MessageStatus.SENT
-        });
-      } else if (message.type === MessageType.CONNECT_CONFIRM) {
-        // Track connection confirmation
-        this.pendingConfirmations.set(message.clientId, {
-          timestamp: Date.now(),
-          messageId
-        });
+        this.messageQueue.addPendingMessage(messageId, ws, message);
       }
 
       // Send the message
@@ -81,7 +76,7 @@ export class ConnectionManager {
         messageId,
         clientId: message.clientId,
         type: message.type,
-        status: MessageStatus.SENT,
+        status: message.status,
         timestamp: new Date().toISOString()
       });
 
@@ -94,48 +89,15 @@ export class ConnectionManager {
         stack: error.stack,
         timestamp: new Date().toISOString()
       });
-
-      if (message.messageId) {
-        messageTracker.updateStatus(message.messageId, MessageStatus.FAILED);
-      }
-
       return false;
     }
   }
 
-  async confirmMessageDelivery(messageId, clientId) {
-    messageTracker.updateStatus(messageId, MessageStatus.RECEIVED);
-    
-    // Update status in persistent store
-    await messageStore.updateMessageStatus(clientId, messageId, MessageStatus.RECEIVED);
-    
-    logger.debug('Message delivery confirmed', {
-      messageId,
-      clientId,
-      status: MessageStatus.RECEIVED,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  async markMessageProcessed(messageId, clientId) {
-    messageTracker.updateStatus(messageId, MessageStatus.PROCESSED);
-    
-    // Update status in persistent store
-    await messageStore.updateMessageStatus(clientId, messageId, MessageStatus.PROCESSED);
-    
-    logger.debug('Message marked as processed', {
-      messageId,
-      clientId,
-      status: MessageStatus.PROCESSED,
-      timestamp: new Date().toISOString()
-    });
-  }
-
   updateActivity(ws) {
     if (ws && ws.readyState === ConnectionState.OPEN) {
-      this.state.updateActivity(ws);
       const client = this.getConnectionInfo(ws);
       if (client) {
+        client.lastMessage = Date.now();
         client.lastActivity = Date.now();
       }
     }
@@ -148,14 +110,6 @@ export class ConnectionManager {
   getAllConnections() {
     return this.state.getAllConnections();
   }
-
-  // Clean up old message tracking data periodically
-  startCleanupInterval() {
-    setInterval(() => {
-      messageTracker.cleanup();
-    }, 60 * 60 * 1000); // Every hour
-  }
 }
 
 export const connectionManager = new ConnectionManager();
-connectionManager.startCleanupInterval();
