@@ -56,6 +56,12 @@ export async function handleMessage(ws, data, client) {
 
     // Update client state for ALL message types
     client.lastMessage = Date.now();
+    client.messageCount = (client.messageCount || 0) + 1;
+
+    // Initialize messages array if not exists
+    if (!client.messages) {
+      client.messages = [];
+    }
 
     // Handle confirmation messages
     if (message.type === MessageType.CONFIRM) {
@@ -89,6 +95,16 @@ export async function handleMessage(ws, data, client) {
       timestamp: getCurrentTimestamp()
     });
 
+    // Store user message in conversation history
+    if (message.content || message.images?.length > 0) {
+      client.messages.push({
+        role: 'user',
+        content: message.content || '',
+        hasImages: !!message.images?.length,
+        timestamp: getCurrentTimestamp()
+      });
+    }
+
     // Send delivery confirmation
     await connectionManager.sendMessage(ws, {
       type: MessageType.CONFIRM,
@@ -118,23 +134,12 @@ export async function handleMessage(ws, data, client) {
       client.imageCount = (client.imageCount || 0) + message.images.length;
     }
 
-    // Store message in conversation history
-    if (!client.messages) {
-      client.messages = [];
-    }
-    client.messages.push({
-      type: 'user',
-      content: message.content,
-      hasImages: !!message.images?.length,
-      timestamp: getCurrentTimestamp()
-    });
-
     // Process message
     const response = await processChat(message, client.id);
 
-    // Store response in conversation history
+    // Store assistant response in conversation history
     client.messages.push({
-      type: 'assistant',
+      role: 'assistant',
       content: response.content,
       timestamp: getCurrentTimestamp()
     });
