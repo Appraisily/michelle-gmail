@@ -4,6 +4,7 @@ import { getOpenAIClient } from '../openai/client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
 import { chatPrompts } from './prompts/chatPrompts.js';
+import { calculateTypingDelay } from './utils/typingDelay.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -156,6 +157,10 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const responseId = uuidv4();
 
     reply = completion.choices[0].message.content;
+
+    // Add human-like typing delay
+    const typingDelay = calculateTypingDelay(reply, message.images?.length > 0);
+    await new Promise(resolve => setTimeout(resolve, typingDelay));
 
     // Update conversation context
     if (message.content || message.images?.length > 0) {
