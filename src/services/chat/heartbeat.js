@@ -28,7 +28,6 @@ export function setupHeartbeat(wss, connectionManager) {
       if (lastActivityAge > HEARTBEAT_TIMEOUT) {
         logger.info('Client exceeded heartbeat timeout', {
           clientId: client.id,
-          lastActivityAge,
           timeout: HEARTBEAT_TIMEOUT,
           timestamp: new Date().toISOString()
         });
@@ -42,8 +41,17 @@ export function setupHeartbeat(wss, connectionManager) {
           clientId: client.id,
           conversationId: client.conversationId,
           lastMessage: new Date(client.lastMessage).toISOString(),
-          inactiveTime: Date.now() - client.lastActivity
+          lastActivityAge: lastActivityAge,
+          timeout: HEARTBEAT_TIMEOUT,
+          inactiveTime: Date.now() - activity.lastActivity,
+          timestamp: new Date().toISOString()
         });
+        
+        // Set disconnect reason before removing
+        client.disconnectReason = 'inactivity';
+        
+        // Set disconnect reason before removing
+        client.disconnectReason = 'heartbeat_timeout';
         
         connectionManager.removeConnection(ws);
         return ws.terminate();

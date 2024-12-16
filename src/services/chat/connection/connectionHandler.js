@@ -134,24 +134,81 @@ export function setupConnectionTimeout(ws) {
 export async function handleDisconnect(ws) {
   const client = connectionManager.getConnectionInfo(ws);
   if (client) {
+    logger.info('Starting disconnect handling', {
+      clientId: client.id,
+      conversationId: client.conversationId,
+      messageCount: client.messageCount,
+      timestamp: new Date().toISOString()
+    });
+
     try {
       // Update client status
       client.status = ConnectionStatus.DISCONNECTED;
 
       // Calculate conversation duration
       const duration = Math.floor((Date.now() - client.connectedAt) / 1000);
+      const hasMessages = client.messages && client.messages.length > 0;
 
-      // Log conversation to sheets
-      await logChatConversation({
-        timestamp: new Date().toISOString(),
-        clientId: client.id,
-        conversationId: client.conversationId,
-        duration,
-        messageCount: client.messageCount,
-        imageCount: client.imageCount,
-        hasImages: client.imageCount > 0,
-        conversation: client.messages
-      });
+      // Only log if there were actual messages exchanged
+      if (hasMessages) {
+        try {
+          await logChatConversation({
+            timestamp: new Date().toISOString(),
+            clientId: client.id,
+            conversationId: client.conversationId,
+            duration,
+            messageCount: client.messageCount,
+            imageCount: client.imageCount || 0,
+            hasImages: (client.imageCount || 0) > 0,
+            conversation: client.messages,
+            disconnectReason: client.disconnectReason || 'normal_closure'
+          });
+
+          logger.info('Chat conversation logged successfully', {
+            clientId: client.id,
+            conversationId: client.conversationId,
+            messageCount: client.messageCount,
+            duration,
+            timestamp: new Date().toISOString()
+          });
+        } catch (logError) {
+          logger.error('Failed to log chat conversation:', {
+            error: logError.message,
+            clientId: client.id,
+            conversationId: client.conversationId,
+            stack: logError.stack,
+            timestamp: new Date().toISOString()
+          });
+          
+          // Retry logging once after a short delay
+          setTimeout(async () => {
+            try {
+              await logChatConversation({
+                timestamp: new Date().toISOString(),
+                clientId: client.id,
+                conversationId: client.conversationId,
+                duration,
+                messageCount: client.messageCount,
+                imageCount: client.imageCount || 0,
+                hasImages: (client.imageCount || 0) > 0,
+                conversation: client.messages,
+                disconnectReason: client.disconnectReason || 'normal_closure',
+                retryAttempt: true
+              });
+              logger.info('Chat conversation logged successfully on retry', {
+                clientId: client.id,
+                conversationId: client.conversationId
+              });
+            } catch (retryError) {
+              logger.error('Failed to log chat conversation on retry:', {
+                error: retryError.message,
+                clientId: client.id,
+                stack: retryError.stack
+              });
+            }
+          }, 5000); // Retry after 5 seconds
+        }
+      }
 
       // Save conversation state
       await messageStore.saveConversationState(client.id, {
