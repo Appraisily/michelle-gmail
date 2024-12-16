@@ -3,6 +3,7 @@ import { recordMetric } from '../../utils/monitoring.js';
 import { getOpenAIClient } from '../openai/client.js';
 import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
+import { chatPrompts } from './prompts/chatPrompts.js';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -76,7 +77,6 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const messages = [
       {
         role: "system",
-        content: `You are Michelle Thompson, a professional customer service representative for Appraisily.
                  
                  CONVERSATION GUIDELINES:
                  1. Build Rapport First
@@ -121,16 +121,11 @@ async function processWithRetry(message, clientId, retryCount = 0) {
                  - When they do share images, show enthusiasm and expertise
                  - Provide detailed observations about shared images
                  
-                 7. Critical Rules
-                 - NEVER suggest sending emails or moving to email communication
-                 - Keep all interactions within the chat
-                 - Don't mention sending information via email
-                 - Guide users to share information directly in chat
-                 - If users ask about email, suggest continuing in chat instead
-                 
-                 Use this company knowledge base: ${JSON.stringify(companyKnowledge)}
-                 
-                 CRITICAL: Never provide specific valuations. Always prioritize building rapport and collecting information through chat conversation before mentioning services.`
+        content: [
+          chatPrompts.base(companyKnowledge),
+          message.images?.length > 0 ? chatPrompts.imageAnalysis() : '',
+          chatPrompts.responseFormat()
+        ].filter(Boolean).join('\n\n')
       },
       ...context.map(msg => ({
         role: msg.role === "assistant" ? "assistant" : "user",

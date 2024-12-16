@@ -1,6 +1,6 @@
 import { logger } from '../../../utils/logger.js';
 import { ConnectionState } from './types.js';
-import { getCurrentTimestamp } from '../utils/timeUtils.js';
+import { activityTracker } from './activity.js';
 
 export class ConnectionStateManager {
   constructor() {
@@ -16,14 +16,18 @@ export class ConnectionStateManager {
         lastActivity: now,
         lastMessage: now,
         connectedAt: now,
-        lastPong: now
+        lastPong: now,
+        isAlive: true
       });
+
+      // Initialize activity tracking
+      activityTracker.updateActivity(clientData.id, 'connect');
       
       logger.debug('Client connection added', {
         clientId: clientData.id,
         conversationId: clientData.conversationId,
         readyState: ws.readyState,
-        timestamp: getCurrentTimestamp()
+        timestamp: new Date(now).toISOString()
       });
     }
   }
@@ -31,10 +35,13 @@ export class ConnectionStateManager {
   removeConnection(ws) {
     const client = this.connections.get(ws);
     if (client) {
+      // Clean up activity tracking
+      activityTracker.removeClient(client.id);
+      
       logger.debug('Client connection removed', {
         clientId: client.id,
         conversationId: client.conversationId,
-        timestamp: getCurrentTimestamp()
+        timestamp: new Date().toISOString()
       });
     }
     this.connections.delete(ws);
@@ -56,18 +63,14 @@ export class ConnectionStateManager {
   updateActivity(ws, messageType) {
     const connection = this.connections.get(ws);
     if (connection) {
-      const now = Date.now();
-      connection.lastActivity = now;
-      
-      // Update lastMessage for all non-system messages
-      if (messageType !== 'ping' && messageType !== 'pong' && messageType !== 'status') {
-        connection.lastMessage = now;
-      }
+      // Update both connection state and activity tracker
+      activityTracker.updateActivity(connection.id, messageType);
+      connection.isAlive = true;
       
       logger.debug('Updated client activity', {
         clientId: connection.id,
         messageType,
-        timestamp: getCurrentTimestamp()
+        timestamp: new Date().toISOString()
       });
     }
   }

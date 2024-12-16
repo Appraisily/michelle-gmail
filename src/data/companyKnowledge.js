@@ -18,33 +18,39 @@ export const companyKnowledge = {
         "Detailed condition report",
         "Market value assessment",
         "Digital documentation",
-        "Expert analysis"
+        "Expert analysis",
+        "Historical research",
+        "Market comparables",
+        "Conservation recommendations",
+        "High-resolution photo analysis"
       ],
-      turnaround: "48 hours"
+      turnaround: "48 hours",
+      useCases: "Perfect for insurance documentation, thorough condition reporting, and detailed market analysis."
     },
     insuranceAppraisal: {
       price: 59,
       features: [
-        "Insurance-grade documentation",
+        "Insurance-specific valuation report",
         "Replacement value assessment",
-        "Risk analysis",
+        "Risk analysis documentation",
         "Digital certification",
-        "Priority processing",
-        "Expert consultation"
+        "Coverage recommendations",
+        "Insurance company coordination",
+        "Security recommendations"
       ],
-      turnaround: "Priority service"
+      useCases: "Ideal for obtaining coverage, replacement values, and meeting insurance requirements."
     },
     taxDeductionAppraisal: {
       price: 59,
       features: [
-        "IRS-compliant valuations",
+        "IRS-compliant appraisal report",
         "Fair market value assessment",
-        "Detailed documentation",
-        "Expert testimony available",
+        "Complete digital documentation",
+        "Expert testimony availability",
         "Tax form assistance",
-        "Rush service available"
+        "Digital certification"
       ],
-      turnaround: "Priority service"
+      useCases: "Great for charitable donations, tax purposes, and meeting IRS standards."
     }
   },
 
@@ -72,29 +78,19 @@ export const companyKnowledge = {
   contact: {
     support: {
       email: "info@appraisily.com",
-      hours: "24/7 via email or live chat at appraisily.com"
-    },
-    technical: {
-      email: "info@appraisily.com"
+      hours: "24/7 via email or live chat"
     }
   },
 
   process: [
-    "Upload Photos: Clients upload clear photos of their items",
-    "Initial Analysis: Receive a free AI-powered initial assessment",
-    "Expert Evaluation: Certified experts conduct professional analysis and market research",
-    "Report Delivery: Receive a comprehensive digital report within the specified turnaround time"
+    "Step 1: Submit photos and a description of your item via our secure platform",
+    "Step 2: Our experts identify the item and conduct initial research with our database",
+    "Step 3: You receive a preliminary assessment (AI-assisted initial findings)",
+    "Step 4: Receive a final formal appraisal report with comprehensive market analysis and documentation"
   ],
 
   startAppraisal: {
     url: "https://appraisily.com/start",
     description: "To begin your appraisal, visit our dedicated appraisal portal at appraisily.com/start"
-  },
-
-  commonResponses: {
-    valueInquiry: "You can use our free AI Analysis tool for an initial assessment. For a detailed valuation, our Regular Appraisal service at $59 will provide you with a comprehensive report.",
-    insuranceQuery: "Yes, our Insurance Appraisal service provides insurance-grade documentation, replacement value assessment, and is accepted by all major insurance companies.",
-    taxQuery: "Yes, our Tax Deduction Appraisal is IRS-compliant and includes all necessary documentation and assistance with tax forms.",
-    accuracyQuestion: "All appraisals are conducted by USPAP-certified experts with specialized knowledge. We also utilize extensive databases and conduct thorough market research to ensure accuracy."
   }
 };

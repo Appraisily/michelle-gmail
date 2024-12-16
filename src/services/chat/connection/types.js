@@ -10,10 +10,10 @@ export const MessageType = {
   CONFIRM: 'confirm',
   IMAGE_STATUS: 'image_status',
   DISCONNECT: 'disconnect',
-  STATUS: 'status' // New type for typing indicators
+  STATUS: 'status'
 };
 
-// Connection States
+// Connection States (WebSocket states)
 export const ConnectionState = {
   CONNECTING: 0,
   OPEN: 1,
@@ -37,21 +37,10 @@ export const MessageStatus = {
   FAILED: 'failed'
 };
 
-// Image Processing Status
-export const ImageProcessingStatus = {
-  RECEIVED: 'received',
-  PROCESSING: 'processing',
-  ANALYZED: 'analyzed',
-  FAILED: 'failed'
-};
-
-// Image Validation
-export const ImageValidation = {
-  MAX_SIZE: 10 * 1024 * 1024, // 10MB
-  SUPPORTED_TYPES: [
-    'image/jpeg',
-    'image/png',
-    'image/gif',
-    'image/webp'
-  ]
+// Activity Types for Tracking
+export const ActivityType = {
+  MESSAGE: 'message',
+  RESPONSE: 'response',
+  SYSTEM: 'system',
+  HEARTBEAT: 'heartbeat'
 };
