@@ -1,6 +1,6 @@
 import { logger } from '../../utils/logger.js';
 import { connectionManager } from './connection/manager.js';
-import { MessageType, ConnectionState } from './connection/types.js';
+import { logChatSession } from './utils/loggingUtils.js';
 import { processChat } from './processor.js';
 import { validateAndPrepareImages } from './handlers/imageHandler.js';
 import { getCurrentTimestamp } from './utils/timeUtils.js';

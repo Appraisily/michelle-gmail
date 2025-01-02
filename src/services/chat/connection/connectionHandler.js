@@ -1,6 +1,6 @@
 import { logger } from '../../../utils/logger.js';
 import { connectionManager } from './manager.js';
-import { MessageType, ConnectionState, ConnectionStatus } from './types.js';
+import { logChatSession } from '../utils/loggingUtils.js';
 import { messageStore } from '../persistence/messageStore.js';
 import { logChatConversation } from '../logger/chatLogger.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -148,28 +148,8 @@ export async function handleDisconnect(ws) {
       // Calculate conversation duration
       const duration = Math.floor((Date.now() - client.connectedAt) / 1000);
 
-      // Only log if there were actual messages
-      if (client.messages?.length > 0) {
-        try {
-          await logChatConversation({
-            timestamp: new Date().toISOString(),
-            clientId: client.id,
-            conversationId: client.conversationId,
-            duration,
-            messageCount: client.messages.length,
-            imageCount: client.imageCount || 0,
-            hasImages: (client.imageCount || 0) > 0,
-            conversation: client.messages || [],
-            disconnectReason: client.disconnectReason || 'normal_closure'
-          });
-        } catch (logError) {
-          logger.error('Failed to log final chat state:', {
-            error: logError.message,
-            clientId: client.id,
-            stack: logError.stack
-          });
-        }
-      }
+      // Log the chat session
+      await logChatSession(client, client.disconnectReason || 'normal_closure');
 
       // Save conversation state
       await messageStore.saveConversationState(client.id, {
