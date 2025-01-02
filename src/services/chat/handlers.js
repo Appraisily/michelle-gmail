@@ -4,6 +4,7 @@ import { MessageType, ConnectionState } from './connection/types.js';
 import { processChat } from './processor.js';
 import { validateAndPrepareImages } from './handlers/imageHandler.js';
 import { getCurrentTimestamp } from './utils/timeUtils.js';
+import { logChatConversation } from './utils/loggingUtils.js';
 
 export async function handleMessage(ws, data, client) {
   try {
@@ -78,27 +79,31 @@ export async function handleMessage(ws, data, client) {
       client.imageCount = (client.imageCount || 0) + message.images.length;
     }
 
-    // Process message
-    const response = await processChat(message, client.id);
-
     // Store message in conversation history
     if (!client.messages) {
       client.messages = [];
     }
 
     if (message.content || message.images?.length > 0) {
+      // Log user message immediately
       client.messages.push({
         role: 'user',
         content: message.content || '',
         hasImages: !!message.images?.length,
-        timestamp: getCurrentTimestamp()
+        timestamp: getCurrentTimestamp(),
+        messageId: message.messageId
       });
     }
 
+    // Process message
+    const response = await processChat(message, client.id);
+
+    // Store assistant response immediately
     client.messages.push({
       role: 'assistant',
       content: response.content,
-      timestamp: getCurrentTimestamp()
+      timestamp: getCurrentTimestamp(),
+      messageId: response.messageId
     });
 
     // Send response
