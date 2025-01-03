@@ -1,10 +1,9 @@
 import { logger } from '../../utils/logger.js';
 import { recordMetric } from '../../utils/monitoring.js';
 import { getOpenAIClient } from '../openai/client.js';
-import { v4 as uuidv4 } from 'uuid';
 import { companyKnowledge } from '../../data/companyKnowledge.js';
-import { chatPrompts } from './prompts/chatPrompts.js';
 import { calculateTypingDelay } from './utils/typingDelay.js';
+import { v4 as uuidv4 } from 'uuid';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -63,18 +62,7 @@ async function processWithRetry(message, clientId, retryCount = 0) {
     const openai = await getOpenAIClient();
     const context = getConversationContext(clientId);
 
-    // Format messages array with images if present
-    const userContent = message.images?.length > 0 ? [
-      { type: "text", text: message.content || '' },
-      ...message.images.map(img => ({
-        type: "image_url",
-        image_url: {
-          url: `data:${img.mimeType};base64,${img.data.toString('base64')}`
-        }
-      }))
-    ] : message.content || '';
-
-    // Format conversation history for OpenAI
+    // Build messages array for OpenAI
     const messages = [
       {
         content: `${classificationPrompts.base(companyKnowledge)}
@@ -121,11 +109,34 @@ CONVERSATION GUIDELINES:
 - Always encourage customers to share images of their items
 - When they do share images, show enthusiasm and expertise
 - Provide detailed observations about shared images`,
-        content: [
-          chatPrompts.base(companyKnowledge),
-          message.images?.length > 0 ? chatPrompts.imageAnalysis() : '',
-          chatPrompts.responseFormat()
-        ].filter(Boolean).join('\n\n')
+        content: `You are Michelle Thompson, a professional customer service representative for Appraisily, a leading art and antique appraisal firm.
+
+Your role is to:
+- Be friendly and professional
+- Show expertise in art and antiques
+- Guide customers towards appraisal services
+- Never provide specific valuations
+- Keep responses focused and helpful
+- Maintain conversation context
+
+Company Knowledge:
+${JSON.stringify(companyKnowledge, null, 2)}
+
+Guidelines:
+1. Build rapport first
+2. Show genuine interest
+3. Share relevant expertise
+4. Guide towards services naturally
+5. Keep responses concise but warm
+6. Never suggest email communication
+7. Always encourage sharing images in chat
+
+When analyzing images:
+- Show enthusiasm and expertise
+- Point out interesting details
+- Discuss style and characteristics
+- Recommend professional appraisal
+- Never provide valuations`
       },
       ...context.map(msg => ({
         role: msg.role === "assistant" ? "assistant" : "user",
@@ -133,13 +144,23 @@ CONVERSATION GUIDELINES:
       })),
       {
         role: "user",
-        content: userContent
+        content: message.images?.length > 0 ? [
+          { type: "text", text: message.content || '' },
+          ...message.images.map(img => ({
+            type: "image_url",
+            image_url: {
+              url: `data:${img.mimeType};base64,${img.data.toString('base64')}`
+            }
+          }))
+        ] : message.content || ''
       }
     ];
 
     logger.debug('Sending chat request to OpenAI', {
       clientId,
       messageCount: messages.length,
+      hasImages: message.images?.length > 0,
+      imageCount: message.images?.length || 0,
       hasImages: message.images?.length > 0,
       imageCount: message.images?.length || 0,
       latestMessage: message.content
@@ -152,25 +173,20 @@ CONVERSATION GUIDELINES:
       max_tokens: 500
     });
 
-    let reply = '';
     const responseId = uuidv4();
-
-    reply = completion.choices[0].message.content;
+    const reply = completion.choices[0].message.content;
 
     // Add human-like typing delay
     const typingDelay = calculateTypingDelay(reply, message.images?.length > 0);
     await new Promise(resolve => setTimeout(resolve, typingDelay));
 
     // Update conversation context
-    if (message.content || message.images?.length > 0) {
-      updateConversationContext(clientId, "user", userContent, message.messageId);
-    }
+    updateConversationContext(clientId, "user", message.content || '', message.messageId);
     updateConversationContext(clientId, "assistant", reply, responseId);
 
     logger.info('Chat response generated', {
       clientId,
       messageId: responseId,
-      replyTo: message.messageId,
       contextLength: context.length,
       timestamp: new Date().toISOString()
     });
