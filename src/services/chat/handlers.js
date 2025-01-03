@@ -4,7 +4,6 @@ import { logChatSession } from './utils/loggingUtils.js';
 import { processChat } from './processor.js';
 import { validateAndPrepareImages } from './handlers/imageHandler.js';
 import { getCurrentTimestamp } from './utils/timeUtils.js';
-import { logChatConversation } from './utils/loggingUtils.js';
 
 export async function handleMessage(ws, data, client) {
   try {

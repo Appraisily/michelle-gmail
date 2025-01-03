@@ -1,5 +1,51 @@
 import { logger } from '../../../utils/logger.js';
-import { logChatConversation } from '../../sheetsService.js';
+import { logEmailProcessing } from '../../sheetsService.js';
+
+export async function logChatSession(client, reason = 'disconnect') {
+  if (!client.messages?.length) {
+    logger.debug('No messages to log', {
+      clientId: client.id,
+      conversationId: client.conversationId
+    });
+    return;
+  }
+
+  try {
+    const duration = Math.floor((Date.now() - client.connectedAt) / 1000);
+
+    await logEmailProcessing({
+      timestamp: new Date().toISOString(),
+      messageId: client.id,
+      sender: client.id,
+      subject: `Chat Session ${client.conversationId}`,
+      hasImages: (client.imageCount || 0) > 0,
+      requiresReply: false,
+      reply: JSON.stringify(client.messages),
+      reason: reason,
+      classification: {
+        intent: 'CHAT_SESSION',
+        urgency: 'medium',
+        suggestedResponseType: 'none'
+      },
+      threadId: client.conversationId,
+      labels: `chat,${reason}`
+    });
+
+    logger.info('Chat session logged successfully', {
+      clientId: client.id,
+      conversationId: client.conversationId,
+      messageCount: client.messages.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Failed to log chat session:', {
+      error: error.message,
+      clientId: client.id,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
 
 /**
  * Log chat conversation to Google Sheets
