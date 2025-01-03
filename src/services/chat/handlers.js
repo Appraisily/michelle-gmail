@@ -153,3 +153,4 @@ export async function handleMessage(ws, data, client) {
       });
     }
   }
+}
