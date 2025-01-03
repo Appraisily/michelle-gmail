@@ -4,9 +4,12 @@ import { logChatSession } from './utils/loggingUtils.js';
 import { processChat } from './processor.js';
 import { validateAndPrepareImages } from './handlers/imageHandler.js';
 import { getCurrentTimestamp } from './utils/timeUtils.js';
+import { MessageType } from './connection/types.js';
 
 export async function handleMessage(ws, data, client) {
   try {
+    const parsedData = JSON.parse(data);
+
     // Verify connection state
     if (ws.readyState !== ConnectionState.OPEN) {
       logger.warn('Attempted to handle message on non-open connection', {
@@ -17,36 +20,34 @@ export async function handleMessage(ws, data, client) {
       return;
     }
 
-    const message = JSON.parse(data);
-
     // Update activity timestamp for ALL message types
     client.lastActivity = Date.now();
 
     // Handle confirmation messages
-    if (message.type === MessageType.CONFIRM) {
-      connectionManager.confirmMessageDelivery(message.messageId);
+    if (parsedData.type === MessageType.CONFIRM) {
+      connectionManager.confirmMessageDelivery(parsedData.messageId);
       return;
     }
 
     // Handle system messages
-    if (message.type === MessageType.PING || 
-        message.type === MessageType.PONG || 
-        message.type === MessageType.STATUS) {
+    if (parsedData.type === MessageType.PING || 
+        parsedData.type === MessageType.PONG || 
+        parsedData.type === MessageType.STATUS) {
       return;
     }
 
     // Update message count for non-system messages
-    if (message.type === MessageType.MESSAGE) {
+    if (parsedData.type === MessageType.MESSAGE) {
       client.messageCount = (client.messageCount || 0) + 1;
     }
 
     logger.info('Processing chat message', {
       clientId: client.id,
       conversationId: client.conversationId,
-      hasContent: !!message.content,
-      hasImages: !!message.images?.length,
-      messageId: message.messageId,
-      messageType: message.type,
+      hasContent: !!parsedData.content,
+      hasImages: !!parsedData.images?.length,
+      messageId: parsedData.messageId,
+      messageType: parsedData.type,
       timestamp: getCurrentTimestamp()
     });
 
@@ -54,7 +55,7 @@ export async function handleMessage(ws, data, client) {
     await connectionManager.sendMessage(ws, {
       type: MessageType.CONFIRM,
       clientId: client.id,
-      messageId: message.messageId,
+      messageId: parsedData.messageId,
       status: 'received',
       timestamp: getCurrentTimestamp()
     });
@@ -65,17 +66,17 @@ export async function handleMessage(ws, data, client) {
       clientId: client.id,
       status: 'typing',
       timestamp: getCurrentTimestamp(),
-      messageId: message.messageId
+      messageId: parsedData.messageId
     });
 
     // Handle images if present
-    if (message.images?.length > 0) {
-      const validation = validateAndPrepareImages(message.images);
+    if (parsedData.images?.length > 0) {
+      const validation = validateAndPrepareImages(parsedData.images);
       if (!validation.isValid) {
         throw new Error(validation.errors.join(', '));
       }
-      message.images = validation.images;
-      client.imageCount = (client.imageCount || 0) + message.images.length;
+      parsedData.images = validation.images;
+      client.imageCount = (client.imageCount || 0) + parsedData.images.length;
     }
 
     // Store message in conversation history
@@ -83,19 +84,19 @@ export async function handleMessage(ws, data, client) {
       client.messages = [];
     }
 
-    if (message.content || message.images?.length > 0) {
+    if (parsedData.content || parsedData.images?.length > 0) {
       // Log user message immediately
       client.messages.push({
         role: 'user',
-        content: message.content || '',
-        hasImages: !!message.images?.length,
+        content: parsedData.content || '',
+        hasImages: !!parsedData.images?.length,
         timestamp: getCurrentTimestamp(),
-        messageId: message.messageId
+        messageId: parsedData.messageId
       });
     }
 
     // Process message
-    const response = await processChat(message, client.id);
+    const response = await processChat(parsedData, client.id);
 
     // Store assistant response immediately
     client.messages.push({
@@ -111,7 +112,7 @@ export async function handleMessage(ws, data, client) {
       clientId: client.id,
       messageId: response.messageId,
       content: response.content,
-      replyTo: message.messageId,
+      replyTo: parsedData.messageId,
       timestamp: getCurrentTimestamp()
     });
 
@@ -121,14 +122,14 @@ export async function handleMessage(ws, data, client) {
       clientId: client.id,
       status: 'idle',
       timestamp: getCurrentTimestamp(),
-      messageId: message.messageId
+      messageId: parsedData.messageId
     });
 
   } catch (error) {
     logger.error('Error handling message', {
       error: error.message,
       clientId: client?.id,
-      messageId: message?.messageId,
+      messageId: parsedData?.messageId,
       stack: error.stack,
       timestamp: getCurrentTimestamp()
     });
@@ -138,7 +139,7 @@ export async function handleMessage(ws, data, client) {
         await connectionManager.sendMessage(ws, {
           type: MessageType.ERROR,
           clientId: client?.id,
-          messageId: message?.messageId,
+          messageId: parsedData?.messageId,
           error: 'An error occurred while processing your message',
           timestamp: getCurrentTimestamp()
         });
@@ -152,4 +153,3 @@ export async function handleMessage(ws, data, client) {
       });
     }
   }
-}
