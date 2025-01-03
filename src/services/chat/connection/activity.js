@@ -1,6 +1,13 @@
 import { logger } from '../../../utils/logger.js';
 import { MessageType } from './types.js';
 
+const SYSTEM_MESSAGE_TYPES = [
+  MessageType.PING,
+  MessageType.PONG,
+  MessageType.CONFIRM,
+  MessageType.STATUS
+];
+
 /**
  * Activity tracker for WebSocket connections
  */
@@ -65,13 +72,13 @@ export class ActivityTracker {
    * @param {string} type Message type
    * @returns {boolean} Whether type represents user activity
    */
-  private isUserActivity(type) {
-    return ![
-      MessageType.PING,
-      MessageType.PONG,
-      MessageType.CONFIRM,
-      MessageType.STATUS
-    ].includes(type);
+  /**
+   * Check if message type represents user activity
+   * @param {string} type Message type
+   * @returns {boolean} Whether type represents user activity
+   */
+  isUserActivity(type) {
+    return !SYSTEM_MESSAGE_TYPES.includes(type);
   }
 }
 
