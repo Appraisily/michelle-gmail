@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { logger } from '../../utils/logger.js';
 import { classifyAndProcessEmail } from '../openai/index.js';
-import { logEmailProcessing } from '../sheetsService.js';
+import { logChatSession } from '../sheetsService.js';
 import { extractImageAttachments } from './attachments.js';
 import { shouldProcessMessage, messageTracker } from './utils/messageFilters.js';
 
@@ -199,18 +199,24 @@ export async function processMessage(auth, messageId) {
       );
 
       // Log to sheets
-      await logEmailProcessing({
+      await logChatSession({
         timestamp: new Date().toISOString(),
-        messageId: message.data.id,
-        sender: from,
-        subject,
-        hasImages: hasValidImages,
-        requiresReply: result.requiresReply,
-        reply: result.generatedReply || 'No reply needed',
-        reason: result.reason,
-        classification: result.classification,
-        threadId,
-        labels: labels.join(', ')
+        clientId: message.data.id,
+        conversationId: threadId,
+        duration: 0,
+        messageCount: 1,
+        imageCount: imageAttachments.length,
+        hasImages: imageAttachments.length > 0,
+        conversation: [{
+          role: 'user',
+          content: content,
+          timestamp: new Date(parseInt(message.data.internalDate)).toISOString()
+        }],
+        metadata: {
+          type: 'EMAIL',
+          urgency: result.classification?.urgency || 'medium',
+          labels: labels.join(', ')
+        }
       });
 
       // Mark message as processed
