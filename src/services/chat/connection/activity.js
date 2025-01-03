@@ -66,17 +66,12 @@ export class ActivityTracker {
   removeClient(clientId) {
     this.activities.delete(clientId);
   }
-
   /**
    * Check if message type represents user activity
    * @param {string} type Message type
    * @returns {boolean} Whether type represents user activity
    */
-  /**
-   * Check if message type represents user activity
-   * @param {string} type Message type
-   * @returns {boolean} Whether type represents user activity
-   */
+  
   isUserActivity(type) {
     return !SYSTEM_MESSAGE_TYPES.includes(type);
   }

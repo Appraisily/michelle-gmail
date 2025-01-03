@@ -29,6 +29,17 @@ export const ConnectionStatus = {
   DISCONNECTED: 'disconnected'
 };
 
+// Image validation constants
+export const ImageValidation = {
+  SUPPORTED_TYPES: [
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp'
+  ],
+  MAX_SIZE: 10 * 1024 * 1024 // 10MB
+};
+
 // Message Status
 export const MessageStatus = {
   SENT: 'sent',
