@@ -2,8 +2,34 @@ import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1 second
+
+async function verifySheetExists(auth, spreadsheetId, sheetTitle) {
+  try {
+    const response = await sheets.spreadsheets.get({
+      auth,
+      spreadsheetId
+    });
+
+    const sheet = response.data.sheets.find(
+      s => s.properties.title === sheetTitle
+    );
+
+    return !!sheet;
+  } catch (error) {
+    logger.error('Error verifying sheet existence:', {
+      error: error.message,
+      sheetTitle,
+      stack: error.stack
+    });
+    return false;
+  }
+}
+
 export async function logChatConversation(conversationData) {
   try {
+    const timestamp = new Date().toISOString();
     const secrets = await getSecrets();
     const spreadsheetId = secrets.MICHELLE_CHAT_LOG_SPREADSHEETID;
 
@@ -20,7 +46,7 @@ export async function logChatConversation(conversationData) {
     await initializeChatSheet(auth, spreadsheetId);
 
     const values = [[
-      new Date().toISOString(),
+      timestamp,
       conversationData.clientId,
       conversationData.conversationId,
       conversationData.duration,
@@ -45,12 +71,13 @@ export async function logChatConversation(conversationData) {
       clientId: conversationData.clientId,
       conversationId: conversationData.conversationId,
       messageCount: conversationData.messageCount,
-      timestamp: new Date().toISOString()
+      timestamp
     });
   } catch (error) {
     logger.error('Error logging chat conversation:', {
       error: error.message,
       stack: error.stack,
+      timestamp: timestamp,
       data: {
         clientId: conversationData.clientId,
         conversationId: conversationData.conversationId
@@ -61,55 +88,79 @@ export async function logChatConversation(conversationData) {
 
 async function initializeChatSheet(auth, spreadsheetId) {
   try {
-    // Check if the Chat sheet exists
-    const response = await sheets.spreadsheets.get({
-      auth,
-      spreadsheetId
-    });
+    let retryCount = 0;
+    let sheetExists = false;
 
-    const chatSheet = response.data.sheets.find(
-      sheet => sheet.properties.title === 'Chat'
-    );
+    while (retryCount < MAX_RETRIES) {
+      sheetExists = await verifySheetExists(auth, spreadsheetId, 'Chat');
+      if (sheetExists) break;
 
-    if (!chatSheet) {
-      // Create the Chat sheet with headers
-      const headers = [
-        ['Timestamp', 'Client ID', 'Conversation ID', 'Duration (seconds)', 
-         'Message Count', 'Image Count', 'Conversation', 'Has Images']
-      ];
+      if (retryCount > 0) {
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      }
 
-      await sheets.spreadsheets.batchUpdate({
-        auth,
-        spreadsheetId,
-        requestBody: {
-          requests: [
-            {
-              addSheet: {
-                properties: {
-                  title: 'Chat'
+      logger.info('Creating Chat sheet', {
+        attempt: retryCount + 1,
+        maxRetries: MAX_RETRIES
+      });
+
+      try {
+        // Create the Chat sheet with headers
+        const headers = [
+          ['Timestamp', 'Client ID', 'Conversation ID', 'Duration (seconds)', 
+           'Message Count', 'Image Count', 'Conversation', 'Has Images']
+        ];
+
+        await sheets.spreadsheets.batchUpdate({
+          auth,
+          spreadsheetId,
+          requestBody: {
+            requests: [
+              {
+                addSheet: { 
+                  properties: {
+                    title: 'Chat'
+                  }
                 }
               }
-            }
-          ]
-        }
-      });
+            ]
+          }
+        });
 
-      await sheets.spreadsheets.values.append({
-        auth,
-        spreadsheetId,
-        range: 'Chat!A1:H1',
-        valueInputOption: 'RAW',
-        requestBody: {
-          values: headers
-        }
-      });
+        await sheets.spreadsheets.values.append({
+          auth,
+          spreadsheetId,
+          range: 'Chat!A1:H1',
+          valueInputOption: 'RAW',
+          requestBody: {
+            values: headers
+          }
+        });
 
-      logger.info('Created Chat sheet with headers');
+        // Verify creation was successful
+        sheetExists = await verifySheetExists(auth, spreadsheetId, 'Chat');
+        if (sheetExists) {
+          logger.info('Chat sheet created successfully');
+          break;
+        }
+      } catch (error) {
+        logger.warn('Failed to create Chat sheet, retrying:', {
+          error: error.message,
+          attempt: retryCount + 1
+        });
+      }
+
+      retryCount++;
+    }
+
+    if (!sheetExists) {
+      throw new Error('Failed to initialize Chat sheet after multiple attempts');
     }
   } catch (error) {
     logger.error('Error initializing chat sheet:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     throw error;
   }
@@ -193,8 +244,12 @@ async function initializeSheet(auth, spreadsheetId) {
   }
 }
 
-export async function logEmailProcessing(logData) {
+export async function logChatSession(logData) {
   try {
+    if (!logData?.clientId || !logData?.conversationId) {
+      throw new Error('Missing required logging data');
+    }
+
     const secrets = await getSecrets();
     const spreadsheetId = secrets.MICHELLE_CHAT_LOG_SPREADSHEETID;
 
@@ -207,42 +262,40 @@ export async function logEmailProcessing(logData) {
       scopes: ['https://www.googleapis.com/auth/spreadsheets']
     });
 
-    // Initialize sheet if needed
-    await initializeSheet(auth, spreadsheetId);
+    // Verify sheet exists before attempting to log
+    const sheetExists = await verifySheetExists(auth, spreadsheetId, 'Chat');
+    if (!sheetExists) {
+      logger.info('Chat sheet not found, initializing...');
+    }
 
-    logger.info('Logging to Google Sheets', {
+    await initializeChatSheet(auth, spreadsheetId);
+
+    logger.info('Logging chat session to Google Sheets', {
       spreadsheetId,
-      messageId: logData.messageId,
-      sender: logData.sender,
-      subject: logData.subject,
-      hasReply: !!logData.reply
+      clientId: logData.clientId,
+      conversationId: logData.conversationId,
+      messageCount: logData.messageCount
     });
 
-    // Format timestamp as ISO string for proper date/time handling in Sheets
-    const timestamp = new Date().toISOString();
-
-    // Determine classification based on intent or presence of images
-    const classification = logData.hasImages ? 'APPRAISAL_LEAD' : 'GENERAL_INQUIRY';
-
     const values = [[
-      timestamp,
-      logData.messageId || 'N/A',
-      logData.sender,
-      logData.subject,
+      logData.timestamp,
+      logData.clientId,
+      logData.conversationId,
+      logData.duration,
+      logData.messageCount,
+      logData.imageCount,
+      JSON.stringify(logData.conversation),
       logData.hasImages ? 'Yes' : 'No',
-      logData.requiresReply ? 'Yes' : 'No',
-      classification,
-      logData.reason,
-      logData.classification?.intent || 'N/A',
-      logData.classification?.urgency || 'N/A',
-      logData.classification?.suggestedResponseType || 'N/A',
-      logData.reply || 'No reply generated'
+      logData.metadata?.type || 'CHAT',
+      logData.metadata?.urgency || 'medium',
+      logData.metadata?.labels || '',
+      logData.disconnectReason || 'normal'
     ]];
 
     await sheets.spreadsheets.values.append({
       auth,
       spreadsheetId,
-      range: 'Logs!A2:L', // Updated range to include the new column
+      range: 'Chat!A2:L',
       valueInputOption: 'USER_ENTERED', // This ensures proper date/time parsing
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
@@ -250,23 +303,22 @@ export async function logEmailProcessing(logData) {
       }
     });
 
-    logger.info('Email processing logged successfully', {
-      messageId: logData.messageId,
-      timestamp,
-      hasAttachments: logData.hasImages ? 'Yes' : 'No',
-      classification,
-      hasReply: !!logData.reply
+    logger.info('Chat session logged successfully', {
+      clientId: logData.clientId,
+      conversationId: logData.conversationId,
+      timestamp: logData.timestamp,
+      messageCount: logData.messageCount
     });
   } catch (error) {
-    logger.error('Error logging to Google Sheets:', {
+    logger.error('Error logging chat session:', {
       error: error.message,
       stack: error.stack,
       data: {
-        messageId: logData.messageId,
-        sender: logData.sender,
-        subject: logData.subject,
-        timestamp: new Date().toISOString()
+        clientId: logData.clientId,
+        conversationId: logData.conversationId,
+        timestamp: logData.timestamp
       }
     });
+    throw error;
   }
 }
