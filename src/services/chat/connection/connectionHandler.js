@@ -4,6 +4,7 @@ import { logChatSession } from '../utils/loggingUtils.js';
 import { messageStore } from '../persistence/messageStore.js';
 import { logChatConversation } from '../logger/chatLogger.js';
 import { v4 as uuidv4 } from 'uuid';
+import { ConnectionState, MessageType, ConnectionStatus } from './types.js';
 
 const CONNECTION_TIMEOUT = 5000; // 5 seconds
 const RECENT_CONNECTIONS_TTL = 3000; // 3 seconds

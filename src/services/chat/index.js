@@ -3,7 +3,7 @@ import { logger } from '../../utils/logger.js';
 import { handleMessage } from './handlers.js';
 import { setupHeartbeat, handlePong } from './heartbeat.js';
 import { connectionManager } from './connection/manager.js';
-import { ConnectionState } from './connection/types.js';
+import { ConnectionState, MessageType } from './connection/types.js';
 import { 
   handleInitialConnection, 
   setupConnectionTimeout, 
