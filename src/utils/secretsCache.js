@@ -43,7 +43,7 @@ class SecretsCache {
       'GMAIL_CLIENT_SECRET',
       'GMAIL_REFRESH_TOKEN',
       'OPENAI_API_KEY',
-      'MICHELLE_CHAT_LOG_SPREADSHEETID',
+      'SHEETS_ID_MICHELLE_CHAT_LOG',
       'DATA_HUB_API_KEY',
       'DIRECT_API_KEY'  // Add the new secret for direct message endpoint
     ];

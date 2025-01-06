@@ -31,10 +31,10 @@ export async function logChatConversation(conversationData) {
   try {
     const timestamp = new Date().toISOString();
     const secrets = await getSecrets();
-    const spreadsheetId = secrets.MICHELLE_CHAT_LOG_SPREADSHEETID;
+    const spreadsheetId = secrets.SHEETS_ID_MICHELLE_CHAT_LOG;
 
     if (!spreadsheetId) {
-      throw new Error('MICHELLE_CHAT_LOG_SPREADSHEETID not found in secrets');
+      throw new Error('SHEETS_ID_MICHELLE_CHAT_LOG not found in secrets');
     }
 
     // Use default credentials from compute engine
@@ -251,10 +251,10 @@ export async function logChatSession(logData) {
     }
 
     const secrets = await getSecrets();
-    const spreadsheetId = secrets.MICHELLE_CHAT_LOG_SPREADSHEETID;
+    const spreadsheetId = secrets.SHEETS_ID_MICHELLE_CHAT_LOG;
 
     if (!spreadsheetId) {
-      throw new Error('MICHELLE_CHAT_LOG_SPREADSHEETID not found in secrets');
+      throw new Error('SHEETS_ID_MICHELLE_CHAT_LOG not found in secrets');
     }
 
     // Use default credentials from compute engine
