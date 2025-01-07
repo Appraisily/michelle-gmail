@@ -1,11 +1,12 @@
 import { google } from 'googleapis';
 import { logger } from '../../utils/logger.js';
 import { classifyAndProcessEmail } from '../openai/index.js';
-import { logChatSession } from '../sheetsService.js';
+import { logEmailProcessing } from '../sheetsService.js';
 import { extractImageAttachments } from './attachments.js';
-import { shouldProcessMessage, messageTracker } from './utils/messageFilters.js';
+import { createDraft } from './drafts.js';
 
 const gmail = google.gmail('v1');
+const processedMessages = new Set();
 const MAX_THREAD_DEPTH = 10;
 const MESSAGE_BATCH_SIZE = 5;
 
@@ -113,120 +114,117 @@ export async function processMessage(auth, messageId) {
     // Check if message/thread should be processed
     const { shouldProcess, reason } = shouldProcessMessage(message.data, process.env.GMAIL_USER_EMAIL);
     if (!shouldProcess) {
-      messageTracker.markProcessed(threadId, messageId);
+      processedMessages.add(messageId);
       return true;
     }
 
     // Check if message was already processed
-    if (messageTracker.isProcessed(threadId, messageId)) {
+    if (processedMessages.has(messageId)) {
       logger.debug('Skipping already processed message', { messageId, threadId });
       return true;
     }
 
-    // Check if thread is being processed
-    if (messageTracker.isThreadLocked(threadId)) {
-      logger.debug('Thread already being processed', { threadId });
-      return true;
-    }
+    const headers = message.data.payload.headers;
+    const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value;
+    const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
+    const content = parseEmailContent(message.data.payload);
+    const labels = message.data.labelIds || [];
 
-    // Lock thread for processing
-    messageTracker.lockThread(threadId);
+    // Extract email address
+    const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
+    const senderEmail = emailMatch[1];
+    const senderName = from.replace(/<.*>/, '').trim();
 
-    try {
-      const headers = message.data.payload.headers;
-      const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value;
-      const from = headers.find(h => h.name.toLowerCase() === 'from')?.value;
-      const content = parseEmailContent(message.data.payload);
-      const labels = message.data.labelIds || [];
+    const senderInfo = {
+      name: senderName,
+      email: senderEmail
+    };
 
-      // Extract email address
-      const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
-      const senderEmail = emailMatch[1];
-      const senderName = from.replace(/<.*>/, '').trim();
+    logger.debug('Processing email message', {
+      messageId: message.data.id,
+      threadId,
+      subject,
+      from: senderInfo,
+      labels,
+      timestamp: new Date(parseInt(message.data.internalDate)).toISOString(),
+      contentLength: content.length
+    });
 
-      const senderInfo = {
-        name: senderName,
-        email: senderEmail
-      };
+    // Get thread messages for context
+    const threadMessages = await getThreadMessages(auth, threadId);
 
-      logger.debug('Processing email message', {
-        messageId: message.data.id,
-        threadId,
-        subject,
-        from: senderInfo,
-        labels,
-        timestamp: new Date(parseInt(message.data.internalDate)).toISOString(),
-        contentLength: content.length
-      });
+    // Only process if this is the latest message in thread
+    const isLatestMessage = threadMessages && 
+      threadMessages[0].id === message.data.id;
 
-      // Get thread messages for context
-      const threadMessages = await getThreadMessages(auth, threadId);
-
-      // Only process if this is the latest message in thread
-      const isLatestMessage = threadMessages && 
-        threadMessages[0].id === message.data.id;
-
-      if (!isLatestMessage) {
-        logger.info('Skipping non-latest message in thread', {
-          messageId,
-          threadId,
-          messageDate: new Date(parseInt(message.data.internalDate)).toISOString(),
-          latestDate: threadMessages?.[0].date
-        });
-        messageTracker.markProcessed(threadId, messageId);
-        return true;
-      }
-
-      // Extract and validate image attachments
-      const imageAttachments = await extractImageAttachments(auth, message.data);
-      const hasValidImages = imageAttachments.length > 0;
-
-      logger.debug('Processing message with OpenAI', {
+    if (!isLatestMessage) {
+      logger.info('Skipping non-latest message in thread', {
         messageId,
-        hasThread: !!threadMessages,
-        threadLength: threadMessages?.length,
-        hasImages: hasValidImages,
-        imageCount: imageAttachments.length
+        threadId,
+        messageDate: new Date(parseInt(message.data.internalDate)).toISOString(),
+        latestDate: threadMessages?.[0].date
       });
-
-      // Process with OpenAI
-      const result = await classifyAndProcessEmail(
-        content,
-        senderEmail,
-        threadMessages,
-        hasValidImages ? imageAttachments : null,
-        senderInfo
-      );
-
-      // Log to sheets
-      await logChatSession({
-        timestamp: new Date().toISOString(),
-        clientId: message.data.id,
-        conversationId: threadId,
-        duration: 0,
-        messageCount: 1,
-        imageCount: imageAttachments.length,
-        hasImages: imageAttachments.length > 0,
-        conversation: [{
-          role: 'user',
-          content: content,
-          timestamp: new Date(parseInt(message.data.internalDate)).toISOString()
-        }],
-        metadata: {
-          type: 'EMAIL',
-          urgency: result.classification?.urgency || 'medium',
-          labels: labels.join(', ')
-        }
-      });
-
-      // Mark message as processed
-      messageTracker.markProcessed(threadId, messageId);
-
+      processedMessages.add(messageId);
       return true;
-    } finally {
-      // Always unlock thread when done
-      messageTracker.unlockThread(threadId);
     }
+
+    // Extract and validate image attachments
+    const imageAttachments = await extractImageAttachments(auth, message.data);
+    const hasValidImages = imageAttachments.length > 0;
+
+    logger.debug('Processing message with OpenAI', {
+      messageId,
+      hasThread: !!threadMessages,
+      threadLength: threadMessages?.length,
+      hasImages: hasValidImages,
+      imageCount: imageAttachments.length
+    });
+
+    // Process with OpenAI
+    const result = await classifyAndProcessEmail(
+      content,
+      senderEmail,
+      threadMessages,
+      hasValidImages ? imageAttachments : null,
+      senderInfo
+    );
+
+    // Log to sheets
+    await logEmailProcessing({
+      timestamp: new Date().toISOString(),
+      clientId: message.data.id,
+      conversationId: threadId,
+      duration: 0,
+      messageCount: 1,
+      imageCount: imageAttachments.length,
+      hasImages: imageAttachments.length > 0,
+      conversation: [{
+        role: 'user',
+        content: content,
+        timestamp: new Date(parseInt(message.data.internalDate)).toISOString()
+      }],
+      metadata: {
+        type: 'EMAIL',
+        urgency: result.classification?.urgency || 'medium',
+        labels: labels.join(', '),
+        classification: result.classification
+      }
+    });
+
+    // Create draft if a reply was generated
+    if (result.generatedReply) {
+      await createDraft(auth, {
+        to: senderEmail,
+        subject: `Re: ${subject}`,
+        body: result.generatedReply,
+        threadId
+      });
+    }
+
+    // Mark message as processed
+    processedMessages.add(messageId);
+
+    return true;
   } catch (error) {
     logger.error('Error processing message:', {
       error: error.message,
@@ -279,7 +277,7 @@ export async function sendEmail(to, subject, body, threadId = null) {
 
     // Mark our sent message as processed
     if (result.data.threadId && result.data.id) {
-      messageTracker.markProcessed(result.data.threadId, result.data.id);
+      processedMessages.add(result.data.id);
     }
 
     return {

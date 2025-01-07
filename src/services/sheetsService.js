@@ -2,8 +2,125 @@ import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
 
+const sheets = google.sheets('v4');
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
+
+export async function logEmailProcessing(logData) {
+  try {
+    const secrets = await getSecrets();
+    const spreadsheetId = secrets.SHEETS_ID_MICHELLE_CHAT_LOG;
+
+    if (!spreadsheetId) {
+      throw new Error('SHEETS_ID_MICHELLE_CHAT_LOG not found in secrets');
+    }
+
+    // Use default credentials from compute engine
+    const auth = await google.auth.getClient({
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+
+    // Initialize Logs sheet if needed
+    await initializeLogsSheet(auth, spreadsheetId);
+
+    const values = [[
+      logData.timestamp,
+      logData.messageId,
+      logData.sender,
+      logData.subject,
+      logData.hasImages ? 'Yes' : 'No',
+      logData.requiresReply ? 'Yes' : 'No',
+      logData.classification?.intent || '',
+      logData.reason || '',
+      logData.classification?.intent || '',
+      logData.classification?.urgency || '',
+      logData.classification?.suggestedResponseType || '',
+      logData.reply || ''
+    ]];
+
+    await sheets.spreadsheets.values.append({
+      auth,
+      spreadsheetId,
+      range: 'Logs!A2:L',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values
+      }
+    });
+
+    logger.info('Email processing logged successfully', {
+      messageId: logData.messageId,
+      sender: logData.sender,
+      timestamp: logData.timestamp
+    });
+  } catch (error) {
+    logger.error('Error logging email processing:', {
+      error: error.message,
+      stack: error.stack,
+      data: {
+        messageId: logData.messageId,
+        sender: logData.sender
+      }
+    });
+  }
+}
+
+async function initializeLogsSheet(auth, spreadsheetId) {
+  try {
+    // Check if the Logs sheet exists
+    const response = await sheets.spreadsheets.get({
+      auth,
+      spreadsheetId
+    });
+
+    const logsSheet = response.data.sheets.find(
+      sheet => sheet.properties.title === 'Logs'
+    );
+
+    if (!logsSheet) {
+      // Create the Logs sheet with headers
+      const headers = [
+        ['Timestamp', 'Message ID', 'Sender', 'Subject', 'Has Images', 'Requires Reply', 
+         'Classification', 'Reason', 'Intent', 'Urgency', 'Response Type', 'Generated Reply']
+      ];
+
+      await sheets.spreadsheets.batchUpdate({
+        auth,
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: 'Logs'
+                }
+              }
+            }
+          ]
+        }
+      });
+
+      await sheets.spreadsheets.values.append({
+        auth,
+        spreadsheetId,
+        range: 'Logs!A1:L1',
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: headers
+        }
+      });
+
+      logger.info('Created Logs sheet with headers');
+    }
+  } catch (error) {
+    logger.error('Error initializing logs sheet:', {
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
+  }
+}
 
 async function verifySheetExists(auth, spreadsheetId, sheetTitle) {
   try {
