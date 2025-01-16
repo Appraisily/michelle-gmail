@@ -1,8 +1,6 @@
 import { google } from 'googleapis';
 import { logger } from '../utils/logger.js';
 import { getSecrets } from '../utils/secretManager.js';
-
-const sheets = google.sheets('v4');
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
@@ -282,8 +280,6 @@ async function initializeChatSheet(auth, spreadsheetId) {
     throw error;
   }
 }
-
-const sheets = google.sheets('v4');
 
 async function initializeSheet(auth, spreadsheetId) {
   try {

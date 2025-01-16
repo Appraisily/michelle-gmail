@@ -12,6 +12,13 @@ import { processDirectMessage } from './services/direct/index.js';
 
 const app = express();
 app.use(express.json());
+app.use(multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 5 // Maximum 5 files
+  }
+}).array('images', 5));
 
 // Enable trust proxy since we're behind Cloud Run
 app.set('trust proxy', true);
@@ -23,15 +30,6 @@ const server = http.createServer(app);
 
 // Initialize WebSocket for chat
 initializeChatService(server);
-
-// Configure multer for file uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-    files: 5 // Maximum 5 files
-  }
-});
 
 // Rate limiting middleware
 const limiter = rateLimit({
@@ -170,10 +168,9 @@ app.post('/api/email/send', verifyApiKey, async (req, res) => {
 });
 
 // Direct message processing endpoint
-app.post('/api/process-message', 
+app.post('/api/process-message',
   verifyDirectApiKey, // Use specific middleware for direct message endpoint
   limiter,
-  upload.array('images', 5),
   async (req, res) => {
     try {
       const result = await processDirectMessage(req);
