@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { logger } from './utils/logger.js';
 import { setupGmailWatch, renewWatch } from './services/gmail/watch.js';
 import { handleWebhook } from './services/gmail/webhook.js';
-import { sendEmail } from './services/gmail/message.js';
+import { sendEmail } from './services/gmail/sender.js';
 import { getSecrets } from './utils/secretManager.js';
 import { initializeChatService } from './services/chat/index.js';
 import { processDirectMessage } from './services/direct/index.js';
