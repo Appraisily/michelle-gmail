@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { logger } from '../../utils/logger.js';
 import { classifyAndProcessEmail } from '../openai/index.js';
-import { logEmailProcessing } from '../sheetsService.js';
+import { logEmailProcessing } from '../sheets/index.js';
 import { extractImageAttachments } from './attachments.js';
 import { createDraft } from './drafts.js';
 
