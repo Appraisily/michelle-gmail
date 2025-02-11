@@ -1,5 +1,5 @@
 import { logger } from '../../../utils/logger.js';
-import { logChatSession as logToSheets } from '../../sheetsService.js';
+import { logChatConversation as logToSheets } from '../../sheets/index.js';
 
 export async function logChatSession(client, reason = 'disconnect') {
   if (!client.messages?.length) {
