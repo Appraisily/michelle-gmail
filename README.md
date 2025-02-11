@@ -1,10 +1,10 @@
-# Michelle - AI Assistant Service
+# Gmail Watch-based Email Processing Service
 
-Michelle is an advanced AI assistant service that processes emails, chat messages, and direct requests using Gmail API watch notifications, real-time WebSocket communication, and OpenAI for intelligent processing. The service provides seamless communication across multiple channels while maintaining context and conversation history.
+A comprehensive backend service that processes emails, chat messages, and direct requests using Gmail API watch notifications, real-time WebSocket communication, and OpenAI for intelligent processing. The service integrates with Data Hub API for appraisal and sales data management.
 
-## Core Features
+## Core Services
 
-### 1. Email Processing
+### 1. Email Processing Service
 - Real-time email monitoring via Gmail Watch API
 - Automatic thread context analysis
 - Image attachment processing with GPT-4V
@@ -13,6 +13,7 @@ Michelle is an advanced AI assistant service that processes emails, chat message
 - Pagination support for history fetching
 - Duplicate message detection
 - Thread context preservation
+- Automatic watch renewal
 
 ### 2. Real-time Chat System
 - WebSocket-based communication
@@ -28,7 +29,7 @@ Michelle is an advanced AI assistant service that processes emails, chat message
 - Message delivery confirmation
 - Connection state management
 
-### 3. Direct Message Processing
+### 3. Direct Message Processing API
 
 #### Endpoint
 ```http
@@ -46,7 +47,8 @@ X-API-Key: DIRECT_API_KEY
   senderName?: string,   // Optional sender name
   context?: {           // Optional additional context
     threadId?: string,
-    conversationId?: string
+    conversationId?: string,
+    wordpressUrl?: string
   }
 }
 ```
@@ -79,66 +81,30 @@ X-API-Key: DIRECT_API_KEY
 }
 ```
 
-## API Endpoints
+#### Features
+- Direct text and image processing
+- Secure file upload handling
+- Comprehensive input validation
+- Rate limiting and access control
+- Integration with OpenAI processing
+- Detailed response metadata
+- Error handling with specific codes
+- Image optimization and validation
+- Request deduplication
+- Performance monitoring
 
-### WebSocket /chat
-Real-time chat connection endpoint.
+### 4. OpenAI Integration
+- GPT-4o for email/chat classification
+- GPT-4V for image analysis
+- Context-aware response generation
+- Automatic retry logic
+- Token limit management
+- Error handling and fallbacks
+- Model selection based on input type
+- Response formatting
+- Conversation history tracking
 
-Message Types:
-- `connect`: Initial connection message
-- `connect_confirm`: Connection confirmation
-- `message`: Chat message
-- `response`: Server response
-- `error`: Error message
-- `ping/pong`: Connection health check
-- `confirm`: Message delivery confirmation
-- `image_status`: Image processing status
-
-### POST /api/gmail/webhook
-Receives Gmail notifications via Pub/Sub push subscription.
-
-### POST /api/gmail/renew-watch
-Manually renews Gmail watch subscription.
-
-### POST /api/email/send
-Sends emails through Gmail API.
-
-Request:
-```javascript
-{
-  "to": "recipient@email.com",
-  "subject": "Email Subject",
-  "body": "Email content in HTML format",
-  "threadId": "optional-thread-id"
-}
-```
-
-### GET /health
-Health check endpoint.
-
-## Configuration
-
-### Environment Variables
-```
-PROJECT_ID=your-gcp-project-id
-GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id
-PUBSUB_TOPIC=gmail-notifications
-PUBSUB_SUBSCRIPTION=gmail-notifications-sub
-GMAIL_USER_EMAIL=info@appraisily.com
-NODE_ENV=production
-```
-
-### Required Secrets
-- GMAIL_CLIENT_ID
-- GMAIL_CLIENT_SECRET
-- GMAIL_REFRESH_TOKEN
-- OPENAI_API_KEY
-- MICHELLE_CHAT_LOG_SPREADSHEETID
-- DATA_HUB_API_KEY
-- DIRECT_API_KEY
-- SHARED_SECRET
-
-## Architecture
+## Architecture Overview
 
 ### Email Processing Flow
 ```
@@ -189,7 +155,115 @@ OpenAI Integration
 Response Router
 ```
 
-## Performance Features
+### Direct Message Processing Flow
+```
+API Request
+  ↓
+Input Validator
+  ├── Message Format Check
+  ├── Image Validation
+  └── Context Verification
+  ↓
+Image Processor
+  ├── Format Validation
+  ├── Size Check
+  └── Base64 Conversion
+  ↓
+OpenAI Service
+  ├── Context Building
+  ├── Image Analysis
+  └── Text Generation
+  ↓
+Response Generator
+  ├── Format Response
+  ├── Add Metadata
+  └── Error Handling
+  ↓
+API Response
+```
+
+## Key Components
+
+### Email Processing Components
+- Gmail Watch Manager: Handles API watch lifecycle
+- History Processor: Manages email history retrieval
+- Message Processor: Handles email content extraction
+- Thread Manager: Maintains conversation context
+- Attachment Handler: Processes email attachments
+- Response Generator: Creates appropriate responses
+
+### Chat System Components
+- Connection Manager: Handles WebSocket connections
+- Message Processor: Validates and processes messages
+- Context Manager: Maintains conversation history
+- Response Handler: Formats and sends responses
+- Heartbeat Service: Maintains connection health
+- Rate Limiter: Prevents message flooding
+- Image Queue: Manages image processing state
+- Message Queue: Handles message delivery and retries
+
+### Direct Message Components
+- Request Validator: Validates incoming requests
+- Image Processor: Optimizes and validates images
+- OpenAI Integration: Processes content and generates responses
+- Response Formatter: Structures API responses
+- Error Handler: Manages error states and responses
+- Rate Limiter: Controls request frequency
+- Metrics Collector: Tracks performance and usage
+
+## API Endpoints
+
+### WebSocket /chat
+Real-time chat connection endpoint.
+
+Message Types:
+- `connect`: Initial connection message
+- `connect_confirm`: Connection confirmation
+- `message`: Chat message
+- `response`: Server response
+- `error`: Error message
+- `ping/pong`: Connection health check
+- `confirm`: Message delivery confirmation
+- `image_status`: Image processing status
+
+### POST /api/gmail/webhook
+Receives Gmail notifications via Pub/Sub push subscription.
+
+### POST /api/gmail/renew-watch
+Manually renews Gmail watch subscription.
+
+### POST /api/email/send
+Sends emails through Gmail API.
+
+### POST /api/process-message
+Direct message processing endpoint.
+
+### GET /health
+Health check endpoint.
+
+## Configuration
+
+### Environment Variables
+```
+PROJECT_ID=your-gcp-project-id
+GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id
+PUBSUB_TOPIC=gmail-notifications
+PUBSUB_SUBSCRIPTION=gmail-notifications-sub
+GMAIL_USER_EMAIL=info@appraisily.com
+NODE_ENV=production
+```
+
+### Required Secrets
+- GMAIL_CLIENT_ID
+- GMAIL_CLIENT_SECRET
+- GMAIL_REFRESH_TOKEN
+- OPENAI_API_KEY
+- MICHELLE_CHAT_LOG_SPREADSHEETID
+- DATA_HUB_API_KEY
+- DIRECT_API_KEY
+- SHARED_SECRET
+
+## Performance Optimizations
 
 ### Chat System
 - Message batching
@@ -208,6 +282,15 @@ Response Router
 - Content truncation for large emails
 - Duplicate message detection
 - Parallel message processing
+
+### Direct Message Processing
+- Input validation caching
+- Image processing queue
+- Parallel image analysis
+- Response caching
+- Rate limiting per client
+- Request deduplication
+- Performance monitoring
 
 ### Memory Management
 - LRU cache for processed messages
@@ -252,71 +335,3 @@ Response Router
 - Data sanitization
 - Image size validation
 - Message validation
-
-## Development
-
-### Installation
-```bash
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
-
-# Run tests
-npm test
-```
-
-### Docker Support
-```bash
-# Build container
-docker build -t michelle-ai .
-
-# Run container
-docker run -p 8080:8080 michelle-ai
-```
-
-## Deployment
-
-The service is designed to run on Google Cloud Run with the following features:
-- Automatic scaling
-- Memory: 512Mi
-- CPU: 1
-- Minimum instances: 1
-- Maximum instances: 10
-- Request timeout: 300s
-- Port: 8080
-
-### Cloud Build Configuration
-The service includes a `cloudbuild.yaml` for automated deployment with:
-- Container build and push
-- Cloud Run deployment
-- Cloud Scheduler job creation for Gmail watch renewal
-- Health check job setup
-
-## Logging and Monitoring
-
-### Google Sheets Integration
-- Email processing logs
-- Chat conversation tracking
-- Session statistics
-- Performance metrics
-
-### Structured Logging
-- Request/response logging
-- Error tracking
-- Performance monitoring
-- Health status
-- Security events
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
-
-## License
-
-This project is proprietary software. All rights reserved.
