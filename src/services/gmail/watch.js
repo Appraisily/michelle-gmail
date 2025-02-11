@@ -3,76 +3,39 @@ import { logger } from '../../utils/logger.js';
 import { getGmailAuth } from './auth.js';
 
 const gmail = google.gmail('v1');
-const WATCH_EXPIRATION_BUFFER = 24 * 60 * 60 * 1000; // 24 hours before expiration
+const WATCH_EXPIRATION_BUFFER = 24 * 60 * 60 * 1000; // 24 hours
+const WATCH_RENEWAL_INTERVAL = 6 * 60 * 60 * 1000;  // 6 hours
+const FORCE_RENEWAL_ON_STARTUP = true;
 
-async function checkExistingWatch(auth) {
+async function stopExistingWatch(auth) {
   try {
-    const profile = await gmail.users.getProfile({
+    logger.info('Attempting to stop existing Gmail watch');
+    
+    await gmail.users.stop({
       auth,
       userId: 'me'
     });
-    
-    return !!profile.data.historyId;
+
+    logger.info('Successfully stopped existing Gmail watch');
+    return true;
   } catch (error) {
-    logger.error('Error checking existing watch:', error);
-    return false;
+    // If error is 404, it means no watch exists, which is fine
+    if (error.code === 404) {
+      logger.info('No existing Gmail watch to stop');
+      return true;
+    }
+    logger.error('Error stopping Gmail watch:', {
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
   }
 }
 
-export async function setupGmailWatch() {
+async function createNewWatch(auth) {
   try {
-    const auth = await getGmailAuth();
-    
-    // First verify access
-    const profile = await gmail.users.getProfile({
-      auth,
-      userId: 'me'
-    });
-    
-    logger.info('Gmail profile verified', {
-      email: profile.data.emailAddress,
-      historyId: profile.data.historyId
-    });
+    logger.info('Creating new Gmail watch');
 
-    // Check if we have an active watch
-    const hasActiveWatch = await checkExistingWatch(auth);
-
-    if (hasActiveWatch) {
-      logger.info('Active watch exists, checking expiration');
-      
-      // Get current watch details
-      const watchDetails = await gmail.users.watch({
-        auth,
-        userId: 'me',
-        requestBody: {
-          topicName: `projects/${process.env.PROJECT_ID}/topics/${process.env.PUBSUB_TOPIC}`,
-          labelIds: ['INBOX']
-        }
-      });
-
-      const expirationTime = parseInt(watchDetails.data.expiration);
-      const now = Date.now();
-
-      // If watch expires in less than 24 hours, renew it
-      if (expirationTime - now < WATCH_EXPIRATION_BUFFER) {
-        logger.info('Watch expiring soon, stopping existing watch');
-        try {
-          await gmail.users.stop({
-            auth,
-            userId: 'me'
-          });
-        } catch (error) {
-          logger.info('No existing watch to stop');
-        }
-      } else {
-        logger.info('Watch is still valid', {
-          expiresIn: Math.floor((expirationTime - now) / (60 * 60 * 1000)) + ' hours'
-        });
-        return watchDetails.data;
-      }
-    }
-
-    // Set up new watch
     const watchResponse = await gmail.users.watch({
       auth,
       userId: 'me',
@@ -83,25 +46,79 @@ export async function setupGmailWatch() {
       }
     });
 
-    logger.info('Watch setup complete', {
+    const expirationDate = new Date(parseInt(watchResponse.data.expiration));
+    logger.info('Gmail watch created successfully', {
       historyId: watchResponse.data.historyId,
-      expiration: new Date(parseInt(watchResponse.data.expiration)).toISOString()
+      expiration: expirationDate.toISOString(),
+      expiresIn: Math.floor((expirationDate - Date.now()) / (60 * 60 * 1000)) + ' hours'
     });
 
     return watchResponse.data;
   } catch (error) {
-    logger.error('Watch setup failed:', error);
+    logger.error('Error creating Gmail watch:', {
+      error: error.message,
+      stack: error.stack
+    });
+    throw error;
+  }
+}
+
+export async function setupGmailWatch() {
+  try {
+    const auth = await getGmailAuth();
+    
+    // First verify Gmail access
+    const profile = await gmail.users.getProfile({
+      auth,
+      userId: 'me'
+    });
+    
+    logger.info('Gmail profile verified', {
+      email: profile.data.emailAddress,
+      historyId: profile.data.historyId
+    });
+
+    // On startup, force stop any existing watch if configured
+    if (FORCE_RENEWAL_ON_STARTUP) {
+      logger.info('Forcing Gmail watch renewal during startup');
+      await stopExistingWatch(auth);
+    }
+
+    // Create new watch
+    const watchData = await createNewWatch(auth);
+
+    return watchData;
+  } catch (error) {
+    logger.error('Gmail watch setup failed:', {
+      error: error.message,
+      stack: error.stack
+    });
     throw error;
   }
 }
 
 export async function renewWatch() {
   try {
-    logger.info('Starting watch renewal process');
-    await setupGmailWatch();
-    logger.info('Watch renewed successfully');
+    logger.info('Starting Gmail watch renewal process');
+    const auth = await getGmailAuth();
+
+    // Always stop existing watch before renewal
+    await stopExistingWatch(auth);
+
+    // Create new watch
+    const watchData = await createNewWatch(auth);
+    
+    logger.info('Gmail watch renewed successfully', {
+      historyId: watchData.historyId,
+      expiration: new Date(parseInt(watchData.expiration)).toISOString()
+    });
+
+    return watchData;
   } catch (error) {
-    logger.error('Watch renewal failed:', error);
+    logger.error('Gmail watch renewal failed:', {
+      error: error.message,
+      stack: error.stack
+    });
     throw error;
   }
 }
