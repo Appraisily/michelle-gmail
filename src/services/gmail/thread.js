@@ -169,4 +169,4 @@ export function formatThreadContext(threadMessages) {
 }
 
 // Export cache for testing
-export const __threadCache = THREAD_CACHE;</content>
+export const __threadCache = THREAD_CACHE;
