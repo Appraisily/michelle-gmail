@@ -2,6 +2,7 @@ import { logger } from '../../../utils/logger.js';
 import { getPubSubClient } from '../client.js';
 import { PUBSUB_CONFIG } from '../config.js';
 import { recordMetric } from '../../../utils/monitoring.js';
+import { v4 as uuidv4 } from 'uuid';
 
 class CRMPublisher {
   constructor() {

@@ -2,7 +2,6 @@ import { logger } from '../../../utils/logger.js';
 import { logChatConversation as logToSheets } from '../../sheets/index.js';
 import { analyzeChatConversation } from '../analyzer.js';
 import { crmPublisher } from '../../pubsub/index.js';
-import { v4 as uuidv4 } from 'uuid';
 
 export async function logChatSession(client, reason = 'disconnect') {
   if (!client.messages?.length) {
@@ -41,7 +40,7 @@ export async function logChatSession(client, reason = 'disconnect') {
 
     // Prepare and publish CRM message
     const crmMessage = {
-      crmProcess: "chatSummary",
+      sessionId: client.conversationId,
       customer: {
         email: client.email || "anonymous"
       },
@@ -58,7 +57,7 @@ export async function logChatSession(client, reason = 'disconnect') {
       metadata: {
         origin: "web-chat",
         agentId: "michelle-bot",
-        timestamp: Date.now()
+        timestamp: Date.now().toString()
       }
     };
 
