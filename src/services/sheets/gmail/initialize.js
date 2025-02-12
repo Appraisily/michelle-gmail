@@ -15,25 +15,25 @@ export async function initializeGmailSheet(auth, spreadsheetId) {
     if (!gmailSheet) {
       const headers = [
         [
-          'Timestamp',
-          'Message ID',
-          'Thread ID',
-          'Sender Email',
-          'Sender Name',
-          'Subject',
-          'Message Content',
-          'Has Images',
-          'Image Count',
-          'Classification Intent',
-          'Classification Urgency',
-          'Response Type',
-          'Requires Reply',
-          'Generated Reply',
-          'Image Analysis',
-          'Processing Time (ms)',
-          'Labels',
-          'Status',
-          'Error (if any)'
+          'A:Timestamp',
+          'B:Message ID',
+          'C:Thread ID',
+          'D:Sender Email',
+          'E:Sender Name',
+          'F:Subject',
+          'G:Message Content',
+          'H:Has Images',
+          'I:Image Count',
+          'J:Classification Intent',
+          'K:Classification Urgency',
+          'L:Response Type',
+          'M:Requires Reply',
+          'N:Generated Reply',
+          'O:Image Analysis',
+          'P:Processing Time (ms)',
+          'Q:Labels',
+          'R:Status',
+          'S:Error (if any)'
         ]
       ];
 
@@ -57,7 +57,7 @@ export async function initializeGmailSheet(auth, spreadsheetId) {
       await sheets.spreadsheets.values.append({
         auth,
         spreadsheetId,
-        range: `${SHEET_NAMES.GMAIL}!A1:S1`,
+        range: `${SHEET_NAMES.GMAIL}!A1`,
         valueInputOption: 'RAW',
         requestBody: { values: headers }
       });

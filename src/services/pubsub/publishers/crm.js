@@ -39,7 +39,34 @@ class CRMPublisher {
         await this.initialize();
       }
 
-      const data = Buffer.from(JSON.stringify(message));
+      // Validate required fields
+      if (!message.crmProcess) {
+        throw new Error('CRM message must have a crmProcess');
+      }
+
+      // Ensure all required nested objects exist
+      const sanitizedMessage = {
+        ...message,
+        sessionId: message.sessionId || message.email?.messageId || uuidv4(),
+        customer: message.customer || {},
+        metadata: message.metadata || {
+          timestamp: Date.now(),
+          status: 'processed',
+          error: null
+        }
+      };
+
+      const data = Buffer.from(JSON.stringify(sanitizedMessage));
+
+      // Log message content before publishing
+      logger.debug('Publishing CRM message', {
+        crmProcess: message.crmProcess,
+        sessionId: sanitizedMessage.sessionId,
+        hasCustomer: !!message.customer,
+        hasMetadata: !!message.metadata,
+        messageSize: data.length,
+        timestamp: new Date().toISOString()
+      });
       const messageId = await this.topic.publish(data, {
         ...options,
         timestamp: new Date().toISOString()
@@ -47,8 +74,9 @@ class CRMPublisher {
 
       logger.info('CRM message published', {
         messageId,
-        type: message.type,
-        source: message.source,
+        crmProcess: message.crmProcess,
+        sessionId: sanitizedMessage.sessionId,
+        dataSize: data.length,
         timestamp: new Date().toISOString()
       });
 

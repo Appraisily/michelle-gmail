@@ -77,37 +77,38 @@ async function processMessage(auth, messageId) {
     // Prepare and publish CRM message
     const crmMessage = {
       crmProcess: "gmailInteraction",
+      sessionId: message.data.id, // Add sessionId at top level
       customer: {
         email: senderEmail,
-        name: senderName
+        name: senderName || ''
       },
       email: {
         messageId: message.data.id,
         threadId,
         subject,
-        content: content.substring(0, 1000), // Truncate long content
+        content: content ? content.substring(0, 1000) : '', // Truncate long content
         timestamp: new Date(parseInt(message.data.internalDate)).toISOString(),
         classification: {
-          intent: result.classification.intent,
-          urgency: result.classification.urgency,
-          responseType: result.classification.suggestedResponseType,
-          requiresReply: result.requiresReply
+          intent: result.classification?.intent || 'UNKNOWN',
+          urgency: result.classification?.urgency || 'medium',
+          responseType: result.classification?.suggestedResponseType || 'detailed',
+          requiresReply: result.requiresReply || false
         },
         attachments: {
           hasImages: imageAttachments.length > 0,
           imageCount: imageAttachments.length,
-          imageAnalysis: result.imageAnalysis
+          imageAnalysis: result.imageAnalysis || ''
         },
         response: {
-          generated: result.generatedReply,
+          generated: result.generatedReply || '',
           status: "pending"
         }
       },
       metadata: {
         origin: "gmail",
-        labels,
+        labels: labels || [],
         processingTime: Date.now() - startTime,
-        timestamp: Date.now(),
+        timestamp: Date.now().toString(), // Convert to string for consistency
         status: "processed",
         error: null
       }
@@ -118,7 +119,19 @@ async function processMessage(auth, messageId) {
     logger.info('CRM message published for email', {
       messageId: message.data.id,
       threadId,
-      timestamp: new Date().toISOString()
+      sessionId: message.data.id,
+      timestamp: new Date().toISOString(),
+      crmMessageData: {
+        customer: {
+          hasEmail: !!crmMessage.customer.email,
+          hasName: !!crmMessage.customer.name
+        },
+        email: {
+          hasContent: !!crmMessage.email.content,
+          hasClassification: !!crmMessage.email.classification,
+          hasResponse: !!crmMessage.email.response
+        }
+      }
     });
 
     return true;

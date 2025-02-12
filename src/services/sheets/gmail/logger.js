@@ -37,7 +37,7 @@ export async function logEmailProcessing(logData) {
       logData.error || ''
     ]];
 
-    await appendToSheet(auth, spreadsheetId, `${SHEET_NAMES.GMAIL}!A2:S`, values);
+    await appendToSheet(auth, spreadsheetId, `${SHEET_NAMES.GMAIL}!A2`, values);
 
     logger.info('Email processing logged successfully', {
       messageId: logData.messageId,
