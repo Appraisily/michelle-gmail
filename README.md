@@ -81,19 +81,20 @@ X-API-Key: DIRECT_API_KEY
 }
 ```
 
-#### Features
-- Direct text and image processing
-- Secure file upload handling
-- Comprehensive input validation
-- Rate limiting and access control
-- Integration with OpenAI processing
-- Detailed response metadata
-- Error handling with specific codes
-- Image optimization and validation
-- Request deduplication
-- Performance monitoring
+### 4. CRM Integration Service
+- Real-time interaction tracking
+- Multi-channel support (email, chat, direct)
+- Pub/Sub based message processing with configurable topics
+- Automatic data transformation
+- Error handling and retries
+- Interaction history tracking
+- Customer context preservation
+- AI-powered conversation analysis
+- Sentiment tracking
+- Topic extraction
+- Automated chat summaries
 
-### 4. OpenAI Integration
+### 5. OpenAI Integration
 - GPT-4o for email/chat classification
 - GPT-4V for image analysis
 - Context-aware response generation
@@ -128,6 +129,10 @@ OpenAI Processor
   ├── Image Analysis (if applicable)
   └── Response Generation
   ↓
+CRM Publisher
+  ↓
+CRM Publisher
+  ↓
 Google Sheets Logger
 ```
 
@@ -152,64 +157,36 @@ OpenAI Integration
   ├── Image Analysis
   └── Response Generation
   ↓
+CRM Publisher
+  ├── Chat Summary Generation
+  ├── Topic Extraction
+  └── Sentiment Analysis
+  ↓
+CRM Publisher
+  ↓
 Response Router
 ```
 
-### Direct Message Processing Flow
+### CRM Integration Flow
 ```
-API Request
+Interaction Event
   ↓
-Input Validator
-  ├── Message Format Check
-  ├── Image Validation
-  └── Context Verification
+Data Transformer
+  ├── Email Transformer
+  ├── Chat Transformer
+  └── Direct Message Transformer
   ↓
-Image Processor
-  ├── Format Validation
-  ├── Size Check
-  └── Base64 Conversion
+CRM Publisher
   ↓
-OpenAI Service
-  ├── Context Building
-  ├── Image Analysis
-  └── Text Generation
+Pub/Sub Topic
   ↓
-Response Generator
-  ├── Format Response
-  ├── Add Metadata
-  └── Error Handling
+CRM Subscriber
   ↓
-API Response
+Data Processing
+  ├── Customer Record Update
+  ├── Interaction History
+  └── Analytics
 ```
-
-## Key Components
-
-### Email Processing Components
-- Gmail Watch Manager: Handles API watch lifecycle
-- History Processor: Manages email history retrieval
-- Message Processor: Handles email content extraction
-- Thread Manager: Maintains conversation context
-- Attachment Handler: Processes email attachments
-- Response Generator: Creates appropriate responses
-
-### Chat System Components
-- Connection Manager: Handles WebSocket connections
-- Message Processor: Validates and processes messages
-- Context Manager: Maintains conversation history
-- Response Handler: Formats and sends responses
-- Heartbeat Service: Maintains connection health
-- Rate Limiter: Prevents message flooding
-- Image Queue: Manages image processing state
-- Message Queue: Handles message delivery and retries
-
-### Direct Message Components
-- Request Validator: Validates incoming requests
-- Image Processor: Optimizes and validates images
-- OpenAI Integration: Processes content and generates responses
-- Response Formatter: Structures API responses
-- Error Handler: Manages error states and responses
-- Rate Limiter: Controls request frequency
-- Metrics Collector: Tracks performance and usage
 
 ## API Endpoints
 
@@ -248,6 +225,7 @@ Health check endpoint.
 PROJECT_ID=your-gcp-project-id
 GOOGLE_CLOUD_PROJECT_ID=your-gcp-project-id
 PUBSUB_TOPIC=gmail-notifications
+PUBSUB_CRM_NAME=your-crm-topic-name
 PUBSUB_SUBSCRIPTION=gmail-notifications-sub
 GMAIL_USER_EMAIL=info@appraisily.com
 NODE_ENV=production
@@ -275,6 +253,10 @@ NODE_ENV=production
 - Image queue management
 - Message delivery tracking
 - Conversation cleanup after 30 minutes of inactivity
+- AI-powered conversation analysis
+- Automated topic extraction
+- Sentiment analysis
+- Chat summary generation
 
 ### Email Processing
 - Message batching (5 messages per batch)
@@ -314,6 +296,9 @@ NODE_ENV=production
 - Performance metrics
 - Client connection status
 - Processing statistics
+- Sentiment tracking
+- Topic analysis
+- Conversation summaries
 - Health checks
 - Image processing metrics
 - Message delivery stats

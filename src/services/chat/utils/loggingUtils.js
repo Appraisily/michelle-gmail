@@ -1,5 +1,8 @@
 import { logger } from '../../../utils/logger.js';
 import { logChatConversation as logToSheets } from '../../sheets/index.js';
+import { analyzeChatConversation } from '../analyzer.js';
+import { crmPublisher } from '../../pubsub/index.js';
+import { v4 as uuidv4 } from 'uuid';
 
 export async function logChatSession(client, reason = 'disconnect') {
   if (!client.messages?.length) {
@@ -15,6 +18,7 @@ export async function logChatSession(client, reason = 'disconnect') {
     const timestamp = now.toISOString();
     const duration = Math.floor((Date.now() - client.connectedAt) / 1000);
 
+    // Log to sheets
     await logToSheets({
       timestamp,
       clientId: client.id,
@@ -32,10 +36,42 @@ export async function logChatSession(client, reason = 'disconnect') {
       }
     });
 
+    // Analyze conversation
+    const analysis = await analyzeChatConversation(client.messages);
+
+    // Prepare and publish CRM message
+    const crmMessage = {
+      crmProcess: "chatSummary",
+      customer: {
+        email: client.email || "anonymous"
+      },
+      chat: {
+        sessionId: uuidv4(),
+        startedAt: new Date(client.connectedAt).toISOString(),
+        endedAt: timestamp,
+        messageCount: client.messages.length,
+        satisfactionScore: 5, // Default score
+        summary: analysis.summary,
+        topics: analysis.topics,
+        sentiment: analysis.sentiment
+      },
+      metadata: {
+        origin: "web-chat",
+        agentId: "michelle-bot",
+        timestamp: Date.now()
+      }
+    };
+
+    await crmPublisher.publish(crmMessage);
+
     logger.info('Chat session logged successfully', {
       clientId: client.id,
       conversationId: client.conversationId,
       messageCount: client.messages.length,
+      analysis: {
+        topics: analysis.topics,
+        sentiment: analysis.sentiment
+      },
       timestamp,
       duration
     });

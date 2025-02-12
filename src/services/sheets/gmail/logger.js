@@ -10,26 +10,39 @@ export async function logEmailProcessing(logData) {
     
     await initializeGmailSheet(auth, spreadsheetId);
 
+    // Extract sender name and email
+    const senderMatch = logData.sender.match(/^(?:([^<]*)<)?([^>]+)>?$/);
+    const senderName = senderMatch ? senderMatch[1]?.trim() || '' : '';
+    const senderEmail = senderMatch ? senderMatch[2]?.trim() || logData.sender : logData.sender;
+
     const values = [[
       logData.timestamp,
       logData.messageId,
-      logData.sender,
-      logData.subject,
+      logData.threadId || '',
+      senderEmail,
+      senderName,
+      logData.subject || '',
+      logData.content || '',
       logData.hasImages ? 'Yes' : 'No',
-      logData.requiresReply ? 'Yes' : 'No',
-      logData.classification?.intent || '',
-      logData.reason || '',
+      logData.imageCount || 0,
       logData.classification?.intent || '',
       logData.classification?.urgency || '',
       logData.classification?.suggestedResponseType || '',
-      logData.reply || ''
+      logData.requiresReply ? 'Yes' : 'No',
+      logData.generatedReply || '',
+      logData.imageAnalysis || '',
+      logData.processingTime || '',
+      Array.isArray(logData.labels) ? logData.labels.join(', ') : logData.labels || '',
+      logData.status || 'Processed',
+      logData.error || ''
     ]];
 
-    await appendToSheet(auth, spreadsheetId, `${SHEET_NAMES.GMAIL}!A2:L`, values);
+    await appendToSheet(auth, spreadsheetId, `${SHEET_NAMES.GMAIL}!A2:S`, values);
 
     logger.info('Email processing logged successfully', {
       messageId: logData.messageId,
-      sender: logData.sender,
+      threadId: logData.threadId,
+      sender: senderEmail,
       timestamp: logData.timestamp
     });
   } catch (error) {
@@ -39,7 +52,8 @@ export async function logEmailProcessing(logData) {
       data: {
         messageId: logData.messageId,
         sender: logData.sender
-      }
+      },
+      timestamp: new Date().toISOString()
     });
   }
 }

@@ -9,6 +9,7 @@ import { sendEmail } from './services/gmail/sender.js';
 import { getSecrets } from './utils/secretManager.js';
 import { initializeChatService } from './services/chat/index.js';
 import { processDirectMessage } from './services/direct/index.js';
+import { crmPublisher, gmailPublisher } from './services/pubsub/index.js';
 
 const app = express();
 app.use(express.json());
@@ -201,6 +202,10 @@ app.get('/health', (req, res) => {
 
 async function startServer() {
   try {
+    // Initialize publishers
+    await crmPublisher.initialize();
+    await gmailPublisher.initialize();
+    
     // Force Gmail watch setup on startup
     logger.info('Starting server with forced Gmail watch setup');
     await setupGmailWatch();

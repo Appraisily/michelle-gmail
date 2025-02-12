@@ -14,8 +14,27 @@ export async function initializeGmailSheet(auth, spreadsheetId) {
 
     if (!gmailSheet) {
       const headers = [
-        ['Timestamp', 'Message ID', 'Sender', 'Subject', 'Has Images', 'Requires Reply', 
-         'Classification', 'Reason', 'Intent', 'Urgency', 'Response Type', 'Generated Reply']
+        [
+          'Timestamp',
+          'Message ID',
+          'Thread ID',
+          'Sender Email',
+          'Sender Name',
+          'Subject',
+          'Message Content',
+          'Has Images',
+          'Image Count',
+          'Classification Intent',
+          'Classification Urgency',
+          'Response Type',
+          'Requires Reply',
+          'Generated Reply',
+          'Image Analysis',
+          'Processing Time (ms)',
+          'Labels',
+          'Status',
+          'Error (if any)'
+        ]
       ];
 
       await sheets.spreadsheets.batchUpdate({
@@ -25,7 +44,10 @@ export async function initializeGmailSheet(auth, spreadsheetId) {
           requests: [{
             addSheet: {
               properties: {
-                title: SHEET_NAMES.GMAIL
+                title: SHEET_NAMES.GMAIL,
+                gridProperties: {
+                  frozenRowCount: 1
+                }
               }
             }
           }]
@@ -35,17 +57,42 @@ export async function initializeGmailSheet(auth, spreadsheetId) {
       await sheets.spreadsheets.values.append({
         auth,
         spreadsheetId,
-        range: `${SHEET_NAMES.GMAIL}!A1:L1`,
+        range: `${SHEET_NAMES.GMAIL}!A1:S1`,
         valueInputOption: 'RAW',
         requestBody: { values: headers }
       });
 
-      logger.info('Created Gmail sheet with headers');
+      // Set column widths for better readability
+      await sheets.spreadsheets.batchUpdate({
+        auth,
+        spreadsheetId,
+        requestBody: {
+          requests: [
+            {
+              updateDimensionProperties: {
+                range: {
+                  sheetId: gmailSheet.properties.sheetId,
+                  dimension: 'COLUMNS',
+                  startIndex: 0,
+                  endIndex: 19
+                },
+                properties: {
+                  pixelSize: 200
+                },
+                fields: 'pixelSize'
+              }
+            }
+          ]
+        }
+      });
+
+      logger.info('Created Gmail sheet with headers and formatting');
     }
   } catch (error) {
     logger.error('Error initializing Gmail sheet:', {
       error: error.message,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     throw error;
   }
