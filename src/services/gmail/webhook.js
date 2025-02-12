@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
 import { logger } from '../../utils/logger.js';
 import { getGmailAuth } from './auth.js';
-import { processMessage } from './sender.js';
+import { processMessage } from './index.js';
 
 const gmail = google.gmail('v1');
 
