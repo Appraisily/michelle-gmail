@@ -3,7 +3,9 @@ import { logger } from '../../utils/logger.js';
 import { getGmailAuth } from './auth.js';
 import { logEmailProcessing } from '../sheets/index.js';
 import { extractImageAttachments } from './attachments.js';
-import { classifyAndProcessEmail } from '../openai/index.js';
+import { classifyAndProcessEmail } from '../openai/index.js'; 
+import { crmPublisher } from '../pubsub/index.js';
+import { v4 as uuidv4 } from 'uuid';
 
 export { processMessage, sendEmail };
 
@@ -67,7 +69,60 @@ async function processMessage(auth, messageId) {
       imageAnalysis: result.imageAnalysis,
       processingTime: Date.now() - startTime,
       labels: labels.join(', '),
-      status: 'Processed'
+      status: 'Processed',
+      error: null
+    });
+
+    // Extract sender info
+    const senderMatch = from.match(/^(?:([^<]*)<)?([^>]+)>?$/);
+    const senderName = senderMatch ? senderMatch[1]?.trim() || '' : '';
+    const senderEmail = senderMatch ? senderMatch[2]?.trim() || from : from;
+
+    // Prepare and publish CRM message
+    const crmMessage = {
+      crmProcess: "gmailInteraction",
+      customer: {
+        email: senderEmail,
+        name: senderName
+      },
+      email: {
+        messageId: message.data.id,
+        threadId,
+        subject,
+        content: content.substring(0, 1000), // Truncate long content
+        timestamp: new Date(parseInt(message.data.internalDate)).toISOString(),
+        classification: {
+          intent: result.classification.intent,
+          urgency: result.classification.urgency,
+          responseType: result.classification.suggestedResponseType,
+          requiresReply: result.requiresReply
+        },
+        attachments: {
+          hasImages: imageAttachments.length > 0,
+          imageCount: imageAttachments.length,
+          imageAnalysis: result.imageAnalysis
+        },
+        response: {
+          generated: result.generatedReply,
+          status: "pending"
+        }
+      },
+      metadata: {
+        origin: "gmail",
+        labels,
+        processingTime: Date.now() - startTime,
+        timestamp: Date.now(),
+        status: "processed",
+        error: null
+      }
+    };
+
+    await crmPublisher.publish(crmMessage);
+
+    logger.info('CRM message published for email', {
+      messageId: message.data.id,
+      threadId,
+      timestamp: new Date().toISOString()
     });
 
     return true;
@@ -83,9 +138,36 @@ async function processMessage(auth, messageId) {
       await logEmailProcessing({
         timestamp: new Date().toISOString(),
         messageId,
+        threadId: message?.data?.threadId,
+        sender: message?.data?.payload?.headers?.find(h => h.name.toLowerCase() === 'from')?.value || '',
+        subject: message?.data?.payload?.headers?.find(h => h.name.toLowerCase() === 'subject')?.value || '',
+        processingTime: Date.now() - startTime,
         status: 'Error',
         error: error.message
       });
+
+      // Send error notification to CRM
+      const crmErrorMessage = {
+        crmProcess: "gmailInteraction",
+        customer: {
+          email: "unknown",
+          name: "unknown"
+        },
+        email: {
+          messageId,
+          threadId: message?.data?.threadId,
+          timestamp: new Date().toISOString()
+        },
+        metadata: {
+          origin: "gmail",
+          status: "error",
+          error: error.message,
+          timestamp: Date.now()
+        }
+      };
+
+      await crmPublisher.publish(crmErrorMessage);
+
     } catch (logError) {
       logger.error('Error logging processing failure:', {
         error: logError.message,
