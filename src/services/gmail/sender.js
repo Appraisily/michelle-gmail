@@ -28,10 +28,11 @@ async function processMessage(auth, messageId) {
     const content = parseEmailContent(message.data.payload);
     const threadId = message.data.threadId;
     const labels = message.data.labelIds || [];
-
-    // Extract email address
-    const emailMatch = from.match(/<([^>]+)>/) || [null, from.split(' ').pop()];
-    const senderEmail = emailMatch[1];
+    
+    // Extract sender info
+    const senderMatch = from.match(/^(?:([^<]*)<)?([^>]+)>?$/);
+    const senderName = senderMatch ? senderMatch[1]?.trim() || '' : '';
+    const senderEmail = senderMatch ? senderMatch[2]?.trim() || from : from;
 
     logger.info('Processing email', {
       messageId: message.data.id,
@@ -72,11 +73,6 @@ async function processMessage(auth, messageId) {
       status: 'Processed',
       error: null
     });
-
-    // Extract sender info
-    const senderMatch = from.match(/^(?:([^<]*)<)?([^>]+)>?$/);
-    const senderName = senderMatch ? senderMatch[1]?.trim() || '' : '';
-    const senderEmail = senderMatch ? senderMatch[2]?.trim() || from : from;
 
     // Prepare and publish CRM message
     const crmMessage = {
